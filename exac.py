@@ -39,7 +39,8 @@ Compress(app)
 app.config['COMPRESS_DEBUG'] = True
 cache = SimpleCache()
 
-EXAC_FILES_DIRECTORY = '../exac_data/'
+#EXAC_FILES_DIRECTORY = '../exac_data/'
+EXAC_FILES_DIRECTORY='/Users/pontikos/exac/exac_data/subset'
 REGION_LIMIT = 1E5
 EXON_PADDING = 50
 # Load default config and override config from an environment variable
@@ -197,7 +198,7 @@ def load_mnps():
     db = get_db()
     start_time = time.time()
 
-    while db.variants.find_and_modify({'has_mnp' : True}, {'$unset': {'has_mnp': '', 'mnps': ''}}):
+    while db.variants.find_and_modify({'has_mnp': {'$eq' : True}}, {'$unset': {'has_mnp': '', 'mnps': ''}}):
         pass
     print 'Deleted MNP data.'
 
@@ -578,15 +579,8 @@ def variant_page(variant_str):
         for het_or_hom in ('het', 'hom',):
             #read_viz_dict[het_or_hom]['some_samples_missing'] = (read_viz_dict[het_or_hom]['n_expected'] > 0)    and (read_viz_dict[het_or_hom]['n_expected'] - read_viz_dict[het_or_hom]['n_available'] > 0)
             read_viz_dict[het_or_hom]['all_samples_missing'] = (read_viz_dict[het_or_hom]['n_expected'] != 0) and (read_viz_dict[het_or_hom]['n_available'] == 0)
-            read_viz_dict[het_or_hom]['readgroups'] = [
-                '%(chrom)s-%(pos)s-%(ref)s-%(alt)s_%(het_or_hom)s%(i)s' % locals()
-                    for i in range(read_viz_dict[het_or_hom]['n_available'])
-            ]   #eg. '1-157768000-G-C_hom1',
-
-            read_viz_dict[het_or_hom]['urls'] = [
-                os.path.join('combined_bams', chrom, 'combined_chr%s_%03d.bam' % (chrom, pos % 1000))
-                    for i in range(read_viz_dict[het_or_hom]['n_available'])
-            ]
+            read_viz_dict[het_or_hom]['readgroups'] = [ '%(chrom)s-%(pos)s-%(ref)s-%(alt)s_%(het_or_hom)s%(i)s' % locals() for i in range(read_viz_dict[het_or_hom]['n_available']) ]   #eg. '1-157768000-G-C_hom1', 
+            read_viz_dict[het_or_hom]['urls'] = [ os.path.join('combined_bams', chrom, 'combined_chr%s_%03d.bam' % (chrom, pos % 1000)) for i in range(read_viz_dict[het_or_hom]['n_available']) ]
 
 
         print 'Rendering variant: %s' % variant_str

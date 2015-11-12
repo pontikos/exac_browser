@@ -6,14 +6,22 @@ import traceback
 from utils import *
 import copy
 
+
 POPS = {
-    'AFR': 'African',
-    'AMR': 'Latino',
-    'EAS': 'East Asian',
-    'FIN': 'European (Finnish)',
-    'NFE': 'European (Non-Finnish)',
-    'SAS': 'South Asian',
-    'OTH': 'Other'
+'OFG':'orofacial granulomatosis',
+'ARVC':'Arrhythmogenic Right Ventricular Cardiomyopathy',
+'BMF':'Bone Marrow Failure',
+'DM':'Dermatology',
+'EPS':'Epilepsy',
+'EYES':'Eye Condition',
+'KC':'Keratoconus',
+'HC':'healthy control',
+'HUNT':'Huntingtons',
+'IBD':'inflammatory bowel disorder',
+'NEUR':'Neurology',
+'PID':'PrimaryImmunoDeficiency',
+'Prion':'PrionDisease',
+'SCD':'SuddenCardiacDeath'
 }
 
 
