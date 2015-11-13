@@ -1,0 +1,15 @@
+code,phenotype
+OFG,OroFacialGranulomatosis
+ARVC,ArrhythmogenicRightVentricularCardiomyopathy
+BMF,BoneMarrowFailure
+DM,Dermatology
+EPS,Epilepsy
+EYES,EyeCondition
+KC,Keratoconus
+HC,HealthyControl
+HUNT,Huntingtons
+IBD,InflammatoryBowelDisorder
+NEUR,Neurology
+PID,PrimaryImmunoDeficiency
+Prion,PrionDisease
+SCD,SuddenCardiacDeath
