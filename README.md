@@ -1,10 +1,7 @@
+This code has been forked from the ExAC browser for the purpose of the exomes hosted at UCL (UCLex).
+
 Usage
 =======
-
-*If you would like to use the ExAC browser, the most recent stable version is hosted at http://uclex.broadinstitute.org*
-
-Advanced: The following instructions are useful for cloning the browser (e.g. to load custom sites/coverage data).
-Most users will not need to go through this process.
 
 Installation
 =======
@@ -18,9 +15,6 @@ Create a directory to put all this stuff in. This will serve as the parent direc
 
 First (as this can run in parallel), get the datasets that the browser uses and put them into an 'uclex_data' directory:
 
-    wget http://broadinstitute.org/~konradk/uclex_browser/uclex_browser.tar.gz .
-    tar zxvf uclex_browser.tar.gz
-    cd ..
 
 Now clone the repo: 
 
