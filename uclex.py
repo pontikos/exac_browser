@@ -32,7 +32,7 @@ logging.getLogger().addHandler(logging.StreamHandler())
 logging.getLogger().setLevel(logging.INFO)
 
 ADMINISTRATORS = (
-    'exac.browser.errors@gmail.com',
+    'n.pontikos@ucl.ac.uk',
 )
 
 app = Flask(__name__)
