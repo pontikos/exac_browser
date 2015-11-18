@@ -322,13 +322,13 @@
             <div class="col-md-6">
                 {% if variant.pop_acs %}
                     <div id="frequency_info_container">
-                        <div class="section_header">Population Frequencies</div>
+                        <div class="section_header">Frequencies</div>
                         <div id="frequency_table_container" class="frequency_displays">
                             {% with chrom = variant.chrom %}
                             <table id="frequency_table">
                                 <thead>
                                     <tr>
-                                        <th>Population</th>
+                                        <th>Cohort</th>
                                         <th>Allele Count</th>
                                         <th>Allele Number</th>
                                         {% if chrom != 'Y' %}
