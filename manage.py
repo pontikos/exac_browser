@@ -1,6 +1,6 @@
 from flask.ext.script import Manager
-from exac import app
-import exac
+from uclex import app
+import uclex
 
 manager = Manager(app)
 
@@ -12,47 +12,47 @@ def hello():
 
 @manager.command
 def load_db():
-    exac.load_db()
+    uclex.load_db()
 
 
 @manager.command
 def load_base_coverage():
-    exac.load_base_coverage()
+    uclex.load_base_coverage()
 
 
 @manager.command
 def load_variants_file():
-    exac.load_variants_file()
+    uclex.load_variants_file()
 
 
 @manager.command
 def load_gene_models():
-    exac.load_gene_models()
+    uclex.load_gene_models()
 
 
 @manager.command
 def load_dbsnp_file():
-    exac.load_dbsnp_file()
+    uclex.load_dbsnp_file()
 
 
 @manager.command
 def load_constraint_information():
-    exac.load_constraint_information()
+    uclex.load_constraint_information()
 
 
 @manager.command
 def load_mnps():
-    exac.load_mnps()
+    uclex.load_mnps()
 
 
 @manager.command
 def create_cache():
-    exac.create_cache()
+    uclex.create_cache()
 
 
 @manager.command
 def precalculate_metrics():
-    exac.precalculate_metrics()
+    uclex.precalculate_metrics()
 
 if __name__ == "__main__":
     manager.run()
