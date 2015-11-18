@@ -1,29 +1,15 @@
 """
 Utils for reading flat files that are loaded into database
 """
+
 import re
 import traceback
 from utils import *
 import copy
+import pandas
 
-
-POPS = {
-'OFG':'orofacial granulomatosis',
-'ARVC':'Arrhythmogenic Right Ventricular Cardiomyopathy',
-'BMF':'Bone Marrow Failure',
-'DM':'Dermatology',
-'EPS':'Epilepsy',
-'EYES':'Eye Condition',
-'KC':'Keratoconus',
-'HC':'healthy control',
-'HUNT':'Huntingtons',
-'IBD':'inflammatory bowel disorder',
-'NEUR':'Neurology',
-'PID':'PrimaryImmunoDeficiency',
-'Prion':'PrionDisease',
-'SCD':'SuddenCardiacDeath'
-}
-
+POPS=pandas.read_csv('pop.csv')
+POPS=dict(zip(POPS.code,POPS.phenotype))
 
 def get_base_coverage_from_file(base_coverage_file):
     """

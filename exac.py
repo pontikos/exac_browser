@@ -26,6 +26,8 @@ import sqlite3
 import traceback
 import time
 
+#import pdb
+
 logging.getLogger().addHandler(logging.StreamHandler())
 logging.getLogger().setLevel(logging.INFO)
 
@@ -40,7 +42,7 @@ app.config['COMPRESS_DEBUG'] = True
 cache = SimpleCache()
 
 #EXAC_FILES_DIRECTORY = '../exac_data/'
-EXAC_FILES_DIRECTORY='/Users/pontikos/exac/exac_data/subset'
+EXAC_FILES_DIRECTORY='/Users/pontikos/exac/exac_data/uclex'
 REGION_LIMIT = 1E5
 EXON_PADDING = 50
 # Load default config and override config from an environment variable
@@ -51,7 +53,7 @@ app.config.update(dict(
     DEBUG=True,
     SECRET_KEY='development key',
     LOAD_DB_PARALLEL_PROCESSES = 4,  # contigs assigned to threads, so good to make this a factor of 24 (eg. 2,3,4,6,8)
-    SITES_VCFS=glob.glob(os.path.join(os.path.dirname(__file__), EXAC_FILES_DIRECTORY, 'ExAC*.vep.vcf.gz')),
+    SITES_VCFS=glob.glob(os.path.join(os.path.dirname(__file__), EXAC_FILES_DIRECTORY, 'uclex.vep.vcf.gz')),
     GENCODE_GTF=os.path.join(os.path.dirname(__file__), EXAC_FILES_DIRECTORY, 'gencode.gtf.gz'),
     CANONICAL_TRANSCRIPT_FILE=os.path.join(os.path.dirname(__file__), EXAC_FILES_DIRECTORY, 'canonical_transcripts.txt.gz'),
     OMIM_FILE=os.path.join(os.path.dirname(__file__), EXAC_FILES_DIRECTORY, 'omim_info.txt.gz'),
@@ -164,11 +166,13 @@ def load_variants_file():
     db.variants.ensure_index('transcripts')
 
     sites_vcfs = app.config['SITES_VCFS']
+    print(sites_vcfs)
     if len(sites_vcfs) > 1:
         raise Exception("More than one sites vcf file found: %s" % sites_vcfs)
 
     procs = []
     num_procs = app.config['LOAD_DB_PARALLEL_PROCESSES']
+    #pdb.set_trace()
     for i in range(num_procs):
         p = Process(target=load_variants, args=(sites_vcfs[0], i, num_procs, db))
         p.start()
