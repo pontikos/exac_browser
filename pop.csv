@@ -11,5 +11,6 @@ HUNT,Huntingtons
 IBD,InflammatoryBowelDisorder
 NEUR,Neurology
 PID,PrimaryImmunoDeficiency
-Prion,PrionDisease
+PRION,PrionDisease
 SCD,SuddenCardiacDeath
+OTH,unknown
