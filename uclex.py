@@ -42,7 +42,7 @@ app.config['COMPRESS_DEBUG'] = True
 cache = SimpleCache()
 
 #EXAC_FILES_DIRECTORY = '../exac_data/'
-EXAC_FILES_DIRECTORY='/Users/pontikos/exac/exac_data/uclex'
+EXAC_FILES_DIRECTORY='../uclex_data/'
 REGION_LIMIT = 1E5
 EXON_PADDING = 50
 # Load default config and override config from an environment variable
@@ -877,5 +877,6 @@ def apply_caching(response):
 
 
 if __name__ == "__main__":
-    runner = Runner(app)  # adds Flask command line options for setting host, port, etc.
-    runner.run()
+    app.run(host='0.0.0.0', port=8000)
+    #runner = Runner(app)  # adds Flask command line options for setting host, port, etc.
+    #runner.run()
