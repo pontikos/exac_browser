@@ -878,4 +878,4 @@ def apply_caching(response):
 
 if __name__ == "__main__":
     runner = Runner(app)  # adds Flask command line options for setting host, port, etc.
-    runner.run()
+    runner.run(port=8080)
