@@ -18,7 +18,7 @@ First (as this can run in parallel), get the datasets that the browser uses and 
 
 Now clone the repo: 
 
-    git clone https://github.com/konradjk/uclex_browser.git
+    git clone https://github.com/pontikos/uclex_browser.git
 
 ### Dependencies
 
