@@ -26,6 +26,9 @@ import sqlite3
 import traceback
 import time
 
+from functools import wraps
+from flask import request, Response
+
 #import pdb
 
 logging.getLogger().addHandler(logging.StreamHandler())
@@ -73,6 +76,25 @@ app.config.update(dict(
 
 GENE_CACHE_DIR = os.path.join(os.path.dirname(__file__), 'gene_cache')
 GENES_TO_CACHE = {l.strip('\n') for l in open(os.path.join(os.path.dirname(__file__), 'genes_to_cache.txt'))}
+
+
+def check_auth(username, password):
+    """This function is called to check if a username / password combination is valid.  """
+    return username == 'admin' and password == 'secret'
+
+def authenticate():
+    """Sends a 401 response that enables basic auth"""
+    return Response( 'Could not verify your access level for that URL.\n' 'You have to login with proper credentials', 401, {'WWW-Authenticate': 'Basic realm="Login Required"'})
+
+def requires_auth(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth = request.authorization
+        if not auth or not check_auth(auth.username, auth.password): return authenticate()
+        return f(*args, **kwargs)
+    return decorated
+
+
 
 def connect_db():
     """
@@ -152,11 +174,9 @@ def load_variants_file():
             db.variants.insert(variants_generator, w=0)
         except pymongo.errors.InvalidOperation:
             pass  # handle error when variant_generator is empty
-
     db = get_db()
     db.variants.drop()
     print("Dropped db.variants")
-
     # grab variants from sites VCF
     db.variants.ensure_index('xpos')
     db.variants.ensure_index('xstart')
@@ -164,12 +184,10 @@ def load_variants_file():
     db.variants.ensure_index('rsid')
     db.variants.ensure_index('genes')
     db.variants.ensure_index('transcripts')
-
     sites_vcfs = app.config['SITES_VCFS']
     print(sites_vcfs)
     if len(sites_vcfs) > 1:
         raise Exception("More than one sites vcf file found: %s" % sites_vcfs)
-
     procs = []
     num_procs = app.config['LOAD_DB_PARALLEL_PROCESSES']
     #pdb.set_trace()
@@ -487,6 +505,7 @@ def get_db():
 
 
 @app.route('/')
+@requires_auth
 def homepage():
     return render_template('homepage.html')
 
@@ -875,8 +894,12 @@ def apply_caching(response):
     response.headers["X-Frame-Options"] = "SAMEORIGIN"
     return response
 
-
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=8000)
     #runner = Runner(app)  # adds Flask command line options for setting host, port, etc.
     #runner.run()
+
+
+
+
+
