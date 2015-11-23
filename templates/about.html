@@ -1,17 +1,17 @@
 {% extends "layout.html" %}
 {% block body %}
     <div class="container">
-        <h1>About ExAC</h1>
+        <h1>About UCLex</h1>
         <div class="row" style="font-size: 16px;">
             <div>
                 <p>
-                    The Exome Aggregation Consortium (ExAC) is a coalition of investigators seeking to aggregate and harmonize exome sequencing data from a variety of large-scale sequencing projects, and to make summary data available for the wider scientific community.
+                    The UCL Exome (UCLex) Consortium is a coalition of investigators seeking to aggregate and harmonize exome sequencing data from a variety of large-scale sequencing projects, and to make summary data available for the wider scientific community.
                 </p>
                 <p>
-                    The data set provided on this website spans <span class="number_samples">61,486</span> unrelated individuals sequenced as part of various disease-specific and population genetic studies. We have removed individuals affected by severe pediatric disease, so this data set should serve as a useful reference set of allele frequencies for severe disease studies. All of the raw data from these projects have been reprocessed through the same pipeline, and jointly variant-called to increase consistency across projects.
+                    The data set provided on this website spans <span class="number_samples"></span> individuals sequenced as part of various disease-specific and population genetic studies. We have removed individuals affected by severe pediatric disease, so this data set should serve as a useful reference set of allele frequencies for severe disease studies. All of the raw data from these projects have been reprocessed through the same pipeline, and jointly variant-called to increase consistency across projects.
                 </p>
                 <p>
-                    A list of ExAC Principal Investigators and groups that have contributed data to the current release is available below.
+                    A list of the UCLex Principal Investigators and groups that have contributed data to the current release is available below.
                 </p>
                 <p>
                     All data here are released under a <a href="http://www.wellcome.ac.uk/stellent/groups/corporatesite/@policy_communications/documents/web_document/wtd003207.pdf">Fort Lauderdale Agreement</a> for the benefit of the wider biomedical community. You can freely download and search the data, and use it for publications focused on specific sets of variants (for instance, assessing the frequency of a set of candidate causal variants observed in a collection of rare disease patients). However, we ask that you not publish global (genome-wide) analyses of these data until after the ExAC flagship paper has been published, estimated to be in late 2015. If you’re uncertain which category your analyses fall into, please <a href="mailto:exomeconsortium@gmail.com">email us</a>.
@@ -24,42 +24,18 @@
                 </p>
             </div>
             <p>
-                To cite the browser, please use: Exome Aggregation Consortium (ExAC), Cambridge, MA (URL: <a href="http://exac.broadinstitute.org">http://exac.broadinstitute.org</a>) [date (month, year) accessed].
+                To cite the browser, please use: UCLex, London, UK (URL: <a href="http://uclex.cs.ucl.ac.uk">http://uclex.cs.ucl.ac.uk</a>) [date (month, year) accessed].
             </p>
             <p>
-                For bug reports, please file an issue on <a href="https://github.com/konradjk/exac_browser/issues">Github</a>.
+                For bug reports, please file an issue on <a href="https://github.com/pontikos/uclex_browser/issues">Github</a>.
             </p>
         </div>
         <div class="row">
             <div class="col-md-3">
-                <h4>ExAC Principal Investigators</h4>
+                <h4>UCLex Principal Investigators</h4>
                 <ul>
-                    <li>Daniel MacArthur</li>
-                    <li>David Altshuler</li>
-                    <li>Diego Ardissino</li>
-                    <li>Michael Boehnke</li>
-                    <li>Mark Daly</li>
-                    <li>John Danesh</li>
-                    <li>Roberto Elosua </li>
-                    <li>Jose Florez</li>
-                    <li>Gad Getz</li>
-                    <li>Christina Hultman</li>
-                    <li>Sekar Kathiresan</li>
-                    <li>Markku Laakso</li>
-                    <li>Steven McCarroll</li>
-                    <li>Mark McCarthy</li>
-                    <li>Dermot McGovern</li>
-                    <li>Ruth McPherson</li>
-                    <li>Benjamin Neale</li>
-                    <li>Aarno Palotie</li>
-                    <li>Shaun Purcell</li>
-                    <li>Danish Saleheen</li>
-                    <li>Jeremiah Scharf</li>
-                    <li>Pamela Sklar</li>
-                    <li>Patrick Sullivan</li>
-                    <li>Jaakko Tuomilehto</li>
-                    <li>Hugh Watkins</li>
-                    <li>James Wilson</li>
+                    <li>Tony Segal</li>
+                    <li>Andrew Webster</li>
                 </ul>
             </div>
             <div class="col-md-4">
@@ -94,59 +70,35 @@
             <div class="col-md-3">
                 <h4>Production team</h4>
                 <ul>
-                    <li>Monkol Lek</li>
-                    <li>Fengmei Zhao</li>
-                    <li>Ryan Poplin</li>
-                    <li>Eric Banks</li>
-                    <li>Timothy Fennell</li>
+                    <li>Nikolas Pontikos</li>
+                    <li>Vincent Plagnol</li>
                 </ul>
                 <h4>Analysis team</h4>
                 <ul>
-                    <li>Monkol Lek</li>
-                    <li>Kaitlin Samocha</li>
-                    <li>Konrad Karczewski</li>
-                    <li>Eric Minikel</li>
-                    <li>James Ware</li>
-                    <li>Anne O'Donnell Luria</li>
-                    <li>Andrew Hill</li>
-                    <li>Beryl Cummings</li>
-                    <li>Daniel Birnbaum</li>
-                    <li>Taru Tukiainen</li>
-                    <li>Laramie Duncan</li>
-                    <li>Karol Estrada</li>
-                    <li>Menachem Fromer</li>
-                    <li>Adam Kiezun</li>
-                    <li>Mitja Kurki</li>
-                    <li>Ron Do</li>
-                    <li>Pradeep Natarajan</li>
-                    <li>Gina Peloso</li>
-                    <li>Hong-Hee Won</li>
+                    <li>Nikolas Pontikos</li>
+                    <li>Vincent Plagnol</li>
+                    <li>Doug Speed</li>
                 </ul>
             </div>
             <div class="col-md-2">
                 <h4>Website team</h4>
                 <ul>
-                    <li>Konrad Karczewski</li>
-                    <li>Brett Thomas</li>
-                    <li>Daniel Birnbaum</li>
-                    <li>Ben Weisburd</li>
+                    <li>Nikolas Pontikos</li>
                 </ul>
                 <h4>Ethics team</h4>
                 <ul>
-                    <li>Stacey Donnelly</li>
-                    <li>Andrea Saltzman</li>
-                    <li>Namrata Gupta</li>
+                    <li></li>
                 </ul>
-                <h4>Broad Genomics Platform</h4>
+                <h4>UCL Computer Science Cluster</h4>
                 <ul>
-                    <li>Stacey Gabriel</li>
+                    <li>Tristan Clarck</li>
+                    <li>David Gregory</li>
                 </ul>
-                Many thanks to the Genomics Platform both for generating much of the exome data displayed here and for providing the computing resources required for this analysis.
+                Many thanks to the various clinicians at UCL for generating much of the exome data displayed here and to Tristan Clarck and David Gregory for the compute.
                 <br>
                 <h4>Funding</h4>
                 <ul>
-                    <li>NIGMS R01 GM104371 (PI: MacArthur)</li>
-                    <li>NIDDK U54 DK105566 (PIs: MacArthur and Neale)</li>
+                    <li> (PI: Vincent Plagnol)</li>
                 </ul>
             </div>
 

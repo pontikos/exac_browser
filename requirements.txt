@@ -3,8 +3,10 @@ Flask-Script==2.0.5
 ipython==2.1.0
 pymongo==2.7.1
 pysam
+#flask-runner
 Flask-Compress==1.0.2
 Flask-ErrorMail==0.2.2
 numpy
 #sqlite3  # used for read-viz on the variant page
+pysql
 Flask-Runner
