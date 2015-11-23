@@ -29,6 +29,8 @@ import time
 from functools import wraps
 from flask import request, Response
 
+import pandas
+
 #import pdb
 
 logging.getLogger().addHandler(logging.StreamHandler())
@@ -828,6 +830,11 @@ def contact_page():
 @app.route('/faq')
 def faq_page():
     return render_template('faq.html')
+
+@app.route('/samples')
+def samples_page():
+    samples=pandas.read_csv('~/UCLexInfo/uclex-samples.csv')
+    return render_template('samples.html',samples=samples.to_html(escape=False))
 
 
 @app.route('/text')
