@@ -54,11 +54,11 @@
         var af_buckets = [0.0001, 0.0002, 0.0005, 0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1];
         function get_af_bucket_text(bin) {
             if (bin == 'singleton' || bin == 'doubleton') {
-                return 'This is the site quality distribution for all ' + bin + 's in ExAC.';
+                return 'This is the site quality distribution for all ' + bin + 's in UCLex.';
             } else if (bin == '0.0001') {
-                return 'This is the site quality distribution for all variants with AF < ' + bin + ' in ExAC.';
+                return 'This is the site quality distribution for all variants with AF < ' + bin + ' in UCLex.';
             } else {
-                return 'This is the site quality distribution for all variants with ' + af_buckets[af_buckets.indexOf(parseFloat(bin)) - 1] + ' < AF < ' + bin + ' in ExAC.';
+                return 'This is the site quality distribution for all variants with ' + af_buckets[af_buckets.indexOf(parseFloat(bin)) - 1] + ' < AF < ' + bin + ' in UCLex.';
             }
         }
         $(document).ready(function() {
@@ -163,9 +163,11 @@
 {#      Upper display #}
         {% if variant.variant_id %}
             {% if variant.allele_num < 97129.6 %}
-                <p><span class="label label-warning">Warning!</span> This variant is only covered in {{ (variant.allele_num/2)|int }} individuals (adjusted allele number = {{ variant.allele_num }}).<br/>
-                This means that the site is covered in fewer than 80% of the individuals in ExAC, which may indicate a low-quality site.</p>
+	<!--
+<p><span class="label label-warning">Warning!</span> This variant is only covered in {{ (variant.allele_num/2)|int }} individuals (adjusted allele number = {{ variant.allele_num }}).<br/>
+                This means that the site is covered in fewer than 80% of the individuals in UCLex, which may indicate a low-quality site.</p>
                 <hr/>
+	-->
             {% endif %}
             <div class="row">
                 <div class="col-md-6">
@@ -312,7 +314,7 @@
                         No annotations were found for this variant.
                     {% endif %}
                 {% else %}
-                    <h3>This variant is not found in ExAC.</h3>
+                    <h3>This variant is not found in UCLex.</h3>
                 {% endif %}
                 </div>
                 <div id="browser_container">
@@ -394,7 +396,7 @@
                         </div>
                         <div id="region_coverage"></div>
                     {% else %}
-                        <h3>This region is not covered in the ExAC dataset.</h3>
+                        <h3>This region is not covered in the UCLex dataset.</h3>
                     {% endif %}
                 {% endif %}
             </div>
@@ -533,7 +535,7 @@
                     name: "gencode v19",
                     displayMode: "SQUISHED"
                 });
-                //tracks.push({ url: '/read_viz/exome_calling_regions.v1.bed', name: "ExAC calling regions" });
+                //tracks.push({ url: '/read_viz/exome_calling_regions.v1.bed', name: "UCLex calling regions" });
                 //tracks.push({ url: '/read_viz/self_chain.sorted.bed',        name: "UCSC self chain" });
 
                 if( location.hash == '#all' ) {
