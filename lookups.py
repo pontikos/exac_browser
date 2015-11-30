@@ -2,12 +2,16 @@ import re
 from utils import *
 
 SEARCH_LIMIT = 10000
+# massive genes?
 UNSUPPORTED_QUERIES = ['TTN', 'ENSG00000155657', 'CMD1G', 'CMH9', 'CMPD4', 'FLJ32040', 'LGMD2J', 'MYLK5', 'TMD',
                        u'ENST00000342175', u'ENST00000359218', u'ENST00000342992', u'ENST00000460472',
                        u'ENST00000589042', u'ENST00000591111']
 
 
 def get_gene(db, gene_id):
+    print(gene_id)
+    for g in db.genes.find({'gene_id': gene_id}): print(g)
+    #return g
     return db.genes.find_one({'gene_id': gene_id}, fields={'_id': False})
 
 
@@ -271,6 +275,7 @@ def get_metrics(db, variant):
 
 
 def remove_extraneous_information(variant):
+    return
     del variant['genotype_depths']
     del variant['genotype_qualities']
     del variant['transcripts']

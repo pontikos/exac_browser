@@ -63,8 +63,7 @@ def get_variants_from_sites_vcf(sites_vcf):
                 continue
 
             # If we get here, it's a variant line
-            if vep_field_names is None:
-                raise Exception("VEP_field_names is None. Make sure VCF header is present.")
+            if vep_field_names is None: raise Exception("VEP_field_names is None. Make sure VCF header is present.")
             # This elegant parsing code below is copied from https://github.com/konradjk/loftee
             fields = line.split('\t')
             info_field = dict([(x.split('=', 1)) if '=' in x else (x, x) for x in re.split(';(?=\w)', fields[7])])
@@ -74,10 +73,17 @@ def get_variants_from_sites_vcf(sites_vcf):
 
             alt_alleles = fields[4].split(',')
 
+            # skip multi alleles for now as I haven't parsed them properly yet
+            if len(alt_alleles)>1: continue
+            #also skip chrom X and Y
+            if fields[0]=='X' or fields[0]=='Y': continue
+
             # different variant for each alt allele
             for i, alt_allele in enumerate(alt_alleles):
 
-                vep_annotations = [ann for ann in coding_annotations if int(ann['ALLELE_NUM']) == i + 1]
+                #vep_annotations = [ann for ann in coding_annotations if int(ann['ALLELE_NUM']) == i + 1]
+                vep_annotations = coding_annotations
+                #print(vep_annotations)
 
                 # Variant is just a dict
                 # Make a copy of the info_field dict - so all the original data remains
@@ -129,7 +135,7 @@ def get_variants_from_sites_vcf(sites_vcf):
                 if 'GQ_HIST' in info_field:
                     hists_all = [info_field['GQ_HIST'].split(',')[0], info_field['GQ_HIST'].split(',')[i+1]]
                     variant['genotype_qualities'] = [zip(gq_mids, map(int, x.split('|'))) for x in hists_all]
-
+                print(variant)
                 yield variant
         except Exception:
             print("Error parsing vcf line: " + line)

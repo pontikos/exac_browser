@@ -25,7 +25,8 @@ import csv
 import pandas
 
 #BASEDIR='~pontikos'
-BASEDIR='/Users/pontikos/'
+#BASEDIR='/Users/pontikos/'
+BASEDIR='../uclex_data/'
 
 #d=pandas.read_csv(file(os.path.join(BASEDIR,'UCLexInfo','uclex-samples.csv'),'r'),delimiter=',')
 POPS=pandas.read_csv('pop.csv')
