@@ -1,4 +1,3 @@
-"CSV Export"
 "HPO id","HPO label"
 "HP:0000602","Ophthalmoplegia"
 "HP:0001271","Polyneuropathy"
@@ -10,4 +9,4 @@
 "HP:0001289","Confusion"
 "HP:0000508","Ptosis"
 "HP:0001251","Ataxia"
-"Total",
+
