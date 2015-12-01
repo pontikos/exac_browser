@@ -1,4 +1,3 @@
-"CSV Export"
 "HPO id","HPO label"
 "HP:0002063","Rigidity"
 "HP:0002072","Chorea"
@@ -18,4 +17,4 @@
 "HP:0002067","Bradykinesia"
 "HP:0002353","EEG abnormality"
 "HP:0002120","Cerebral cortical atrophy"
-"Total",
+
