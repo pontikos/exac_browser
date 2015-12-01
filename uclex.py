@@ -1,3 +1,5 @@
+#!/usr/bin/env python2
+
 import itertools
 import json
 import os
@@ -45,7 +47,7 @@ app = Flask(__name__)
 mail_on_500(app, ADMINISTRATORS)
 Compress(app)
 app.config['COMPRESS_DEBUG'] = True
-cache = SimpleCache()
+cache = SimpleCache(default_timeout=60*60*24)
 
 EXAC_FILES_DIRECTORY='/data/uclex_data/'
 REGION_LIMIT = 1E5
@@ -228,13 +230,13 @@ def load_mnps():
     db = get_db()
     start_time = time.time()
 
-    while db.variants.find_and_modify({'has_mnp': {'$eq' : True}}, {'$unset': {'has_mnp': '', 'mnps': ''}}):
-        pass
+    db.variants.ensure_index('has_mnp')
+    print 'Done indexing.'
+    while db.variants.find_and_modify({'has_mnp' : True}, {'$unset': {'has_mnp': '', 'mnps': ''}}): pass
     print 'Deleted MNP data.'
 
     with gzip.open(app.config['MNP_FILE']) as mnp_file:
         for mnp in get_mnp_data(mnp_file):
-            if not mnp['site2'].startswith('22-'): continue
             variant = lookups.get_raw_variant(db, mnp['xpos'], mnp['ref'], mnp['alt'], True)
             db.variants.find_and_modify({'_id': variant['_id']}, {'$set': {'has_mnp': True}, '$push': {'mnps': mnp}}, w=0)
 
@@ -424,8 +426,8 @@ def create_cache():
     for gene_id in GENES_TO_CACHE:
         try:
             page_content = get_gene_page_content(gene_id)
-        except Exception:
-            print Exception
+        except Exception as e:
+            print e
             continue
         f = open(os.path.join(GENE_CACHE_DIR, '{}.html'.format(gene_id)), 'w')
         f.write(page_content)
@@ -514,7 +516,12 @@ def get_db():
 @app.route('/')
 @requires_auth
 def homepage():
-    return render_template('homepage.html')
+    cache_key = 't-homepage'
+    t = cache.get(cache_key)
+    if t is None:
+        t = render_template('homepage.html')
+        cache.set(cache_key, t)
+    return t
 
 
 @app.route('/autocomplete/<query>')
@@ -624,7 +631,7 @@ def variant_page(variant_str):
             read_viz=read_viz_dict,
         )
     except Exception:
-        print 'Failed on variant:', variant_str, '; Error=', traceback.format_exc()
+        print 'Failed on variant:', variant_str, ';Error=', traceback.format_exc()
         abort(404)
 
 
@@ -644,6 +651,7 @@ def get_gene_page_content(gene_id):
             abort(404)
         cache_key = 't-gene-{}'.format(gene_id)
         t = cache.get(cache_key)
+        print 'Rendering %sgene: %s' % ('' if t is None else 'cached ', gene_id)
         if t is None:
             variants_in_gene = lookups.get_variants_in_gene(db, gene_id)
             print('variants_in_gene',len(variants_in_gene))
@@ -673,7 +681,8 @@ def get_gene_page_content(gene_id):
                 variants_in_transcript=variants_in_transcript,
                 transcripts_in_gene=transcripts_in_gene,
                 coverage_stats=coverage_stats,
-                constraint=constraint_info
+                constraint=constraint_info,
+                csq_order=csq_order,
             )
             print('all good')
             cache.set(cache_key, t, timeout=1000*60)
@@ -695,6 +704,7 @@ def transcript_page(transcript_id):
 
         cache_key = 't-transcript-{}'.format(transcript_id)
         t = cache.get(cache_key)
+        print 'Rendering %stranscript: %s' % ('' if t is None else 'cached ', transcript_id)
         if t is None:
 
             gene = lookups.get_gene(db, transcript['gene_id'])
@@ -715,12 +725,12 @@ def transcript_page(transcript_id):
                 coverage_stats_json=json.dumps(coverage_stats),
                 gene=gene,
                 gene_json=json.dumps(gene),
+                csq_order=csq_order,
             )
-            cache.set(cache_key, t, timeout=1000*60)
-        print 'Rendering transcript: %s' % transcript_id
+            cache.set(cache_key, t)
         return t
     except Exception, e:
-        print 'Failed on transcript:', transcript_id, ';Error=', e
+        print 'Failed on transcript:', transcript_id, ';Error=', traceback.format_exc()
         abort(404)
 
 
@@ -731,6 +741,7 @@ def region_page(region_id):
         region = region_id.split('-')
         cache_key = 't-region-{}'.format(region_id)
         t = cache.get(cache_key)
+        print 'Rendering %sregion: %s' % ('' if t is None else 'cached ', region_id)
         if t is None:
             chrom = region[0]
             start = None
@@ -747,7 +758,8 @@ def region_page(region_id):
                     chrom=chrom,
                     start=start,
                     stop=stop,
-                    coverage=None
+                    coverage=None,
+                    csq_order=csq_order,
                 )
             if start == stop:
                 start -= 20
@@ -764,12 +776,13 @@ def region_page(region_id):
                 chrom=chrom,
                 start=start,
                 stop=stop,
-                coverage=coverage_array
+                coverage=coverage_array,
+                csq_order=csq_order,
             )
-        print 'Rendering region: %s' % region_id
+            cache.set(cache_key, t)
         return t
     except Exception, e:
-        print 'Failed on region:', region_id, ';Error=', e
+        print 'Failed on region:', region_id, ';Error=', traceback.format_exc()
         abort(404)
 
 
@@ -790,10 +803,11 @@ def dbsnp_page(rsid):
             start=start,
             stop=stop,
             coverage=None,
-            genes_in_region=None
+            genes_in_region=None,
+            csq_order=csq_order,
         )
     except Exception, e:
-        print 'Failed on rsid:', rsid, ';Error=', e
+        print 'Failed on rsid:', rsid, ';Error=', traceback.format_exc()
         abort(404)
 
 
@@ -808,14 +822,9 @@ def not_found_page(query):
 @app.route('/error/<query>')
 @app.errorhandler(404)
 def error_page(query):
-    if type(query) == str or type(query) == unicode:
-        unsupported = "TTN" if query.upper() in lookups.UNSUPPORTED_QUERIES else None
-    else:
-        unsupported = None
     return render_template(
         'error.html',
-        query=query,
-        unsupported=unsupported
+        query=query
     )
 
 
