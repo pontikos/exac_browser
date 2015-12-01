@@ -46,8 +46,7 @@ Compress(app)
 app.config['COMPRESS_DEBUG'] = True
 cache = SimpleCache()
 
-#EXAC_FILES_DIRECTORY = '../exac_data/'
-EXAC_FILES_DIRECTORY='../uclex_data/'
+EXAC_FILES_DIRECTORY='/data/uclex_data/'
 REGION_LIMIT = 1E5
 EXON_PADDING = 50
 # Load default config and override config from an environment variable
@@ -58,7 +57,9 @@ app.config.update(dict(
     DEBUG=True,
     SECRET_KEY='development key',
     LOAD_DB_PARALLEL_PROCESSES = 4,  # contigs assigned to threads, so good to make this a factor of 24 (eg. 2,3,4,6,8)
-    SITES_VCFS=glob.glob(os.path.join(os.path.dirname(__file__), EXAC_FILES_DIRECTORY, 'uclex.vep.vcf.gz')),
+    #SITES_VCFS=glob.glob(os.path.join(os.path.dirname(__file__), EXAC_FILES_DIRECTORY, 'uclex.vep.vcf.gz')),
+    #SITES_VCFS=glob.glob(os.path.join(os.path.dirname(__file__), EXAC_FILES_DIRECTORY, 'mainset_November2015_chr*.vcf.gz')),
+    SITES_VCFS=glob.glob(os.path.join(os.path.dirname(__file__), EXAC_FILES_DIRECTORY, 'test.vcf.gz')),
     GENCODE_GTF=os.path.join(os.path.dirname(__file__), EXAC_FILES_DIRECTORY, 'gencode.gtf.gz'),
     CANONICAL_TRANSCRIPT_FILE=os.path.join(os.path.dirname(__file__), EXAC_FILES_DIRECTORY, 'canonical_transcripts.txt.gz'),
     OMIM_FILE=os.path.join(os.path.dirname(__file__), EXAC_FILES_DIRECTORY, 'omim_info.txt.gz'),
@@ -119,13 +120,14 @@ def parse_tabix_file_subset(tabix_filenames, subset_i, subset_n, record_parser):
         record_parser: a function that takes a file-like object and returns a generator of parsed records
     """
     start_time = time.time()
+    print(tabix_filenames)
     open_tabix_files = [pysam.Tabixfile(tabix_filename) for tabix_filename in tabix_filenames]
     tabix_file_contig_pairs = [(tabix_file, contig) for tabix_file in open_tabix_files for contig in tabix_file.contigs]
     tabix_file_contig_subset = tabix_file_contig_pairs[subset_i : : subset_n]  # get every n'th tabix_file/contig pair
     short_filenames = ", ".join(map(os.path.basename, tabix_filenames))
+    print(short_filenames)
     num_file_contig_pairs = len(tabix_file_contig_subset)
-    print(("Loading subset %(subset_i)s of %(subset_n)s total: %(num_file_contig_pairs)s contigs from "
-           "%(short_filenames)s") % locals())
+    print(("Loading subset %(subset_i)s of %(subset_n)s total: %(num_file_contig_pairs)s contigs from %(short_filenames)s") % locals())
     counter = 0
     for tabix_file, contig in tabix_file_contig_subset:
         header_iterator = tabix_file.header
@@ -171,11 +173,12 @@ def load_base_coverage():
 
 def load_variants_file():
     def load_variants(sites_file, i, n, db):
-        variants_generator = parse_tabix_file_subset([sites_file], i, n, get_variants_from_sites_vcf)
-        try:
-            db.variants.insert(variants_generator, w=0)
-        except pymongo.errors.InvalidOperation:
-            pass  # handle error when variant_generator is empty
+	for f in sites_file:
+		variants_generator = parse_tabix_file_subset([f], i, n, get_variants_from_sites_vcf)
+		try:
+		    db.variants.insert(variants_generator, w=0)
+		except pymongo.errors.InvalidOperation:
+		    pass  # handle error when variant_generator is empty
     db = get_db()
     db.variants.drop()
     print("Dropped db.variants")
@@ -188,13 +191,12 @@ def load_variants_file():
     db.variants.ensure_index('transcripts')
     sites_vcfs = app.config['SITES_VCFS']
     print(sites_vcfs)
-    if len(sites_vcfs) > 1:
-        raise Exception("More than one sites vcf file found: %s" % sites_vcfs)
+    #if len(sites_vcfs) > 1: raise Exception("More than one sites vcf file found: %s" % sites_vcfs)
     procs = []
     num_procs = app.config['LOAD_DB_PARALLEL_PROCESSES']
     #pdb.set_trace()
     for i in range(num_procs):
-        p = Process(target=load_variants, args=(sites_vcfs[0], i, num_procs, db))
+        p = Process(target=load_variants, args=(sites_vcfs, i, num_procs, db))
         p.start()
         procs.append(p)
     return procs
@@ -642,6 +644,7 @@ def get_gene_page_content(gene_id):
         t = cache.get(cache_key)
         if t is None:
             variants_in_gene = lookups.get_variants_in_gene(db, gene_id)
+            print(len(variants_in_gene))
             transcripts_in_gene = lookups.get_transcripts_in_gene(db, gene_id)
 
             # Get some canonical transcript and corresponding info
@@ -833,7 +836,7 @@ def faq_page():
 
 @app.route('/samples')
 def samples_page():
-    samples=pandas.read_csv('~/UCLexInfo/uclex-samples.csv')
+    samples=pandas.read_csv('/data/uclex_data/UCLexInfo/uclex-samples.csv')
     return render_template('samples.html',samples=samples.to_html(escape=False))
 
 
