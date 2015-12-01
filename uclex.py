@@ -29,6 +29,9 @@ import time
 from functools import wraps
 from flask import request, Response
 
+from flask_debugtoolbar import DebugToolbarExtension
+from werkzeug.exceptions import default_exceptions, HTTPException
+
 import pandas
 
 #import pdb
@@ -36,9 +39,7 @@ import pandas
 logging.getLogger().addHandler(logging.StreamHandler())
 logging.getLogger().setLevel(logging.INFO)
 
-ADMINISTRATORS = (
-    'n.pontikos@ucl.ac.uk',
-)
+ADMINISTRATORS = ( 'n.pontikos@ucl.ac.uk',)
 
 app = Flask(__name__)
 mail_on_500(app, ADMINISTRATORS)
@@ -53,13 +54,14 @@ EXON_PADDING = 50
 app.config.update(dict(
     DB_HOST='localhost',
     DB_PORT=27017,
-    DB_NAME='exac', 
+    DB_NAME='uclex', 
     DEBUG=True,
+    DEBUG_TB_TEMPLATE_EDITOR_ENABLED=True,
     SECRET_KEY='development key',
     LOAD_DB_PARALLEL_PROCESSES = 4,  # contigs assigned to threads, so good to make this a factor of 24 (eg. 2,3,4,6,8)
     #SITES_VCFS=glob.glob(os.path.join(os.path.dirname(__file__), EXAC_FILES_DIRECTORY, 'uclex.vep.vcf.gz')),
-    #SITES_VCFS=glob.glob(os.path.join(os.path.dirname(__file__), EXAC_FILES_DIRECTORY, 'mainset_November2015_chr*.vcf.gz')),
-    SITES_VCFS=glob.glob(os.path.join(os.path.dirname(__file__), EXAC_FILES_DIRECTORY, 'test.vcf.gz')),
+    #SITES_VCFS=glob.glob(os.path.join(os.path.dirname(__file__), EXAC_FILES_DIRECTORY, 'test.vcf.gz')),
+    SITES_VCFS=glob.glob(os.path.join(os.path.dirname(__file__), EXAC_FILES_DIRECTORY, 'mainset_November2015_chr*.vcf.gz')),
     GENCODE_GTF=os.path.join(os.path.dirname(__file__), EXAC_FILES_DIRECTORY, 'gencode.gtf.gz'),
     CANONICAL_TRANSCRIPT_FILE=os.path.join(os.path.dirname(__file__), EXAC_FILES_DIRECTORY, 'canonical_transcripts.txt.gz'),
     OMIM_FILE=os.path.join(os.path.dirname(__file__), EXAC_FILES_DIRECTORY, 'omim_info.txt.gz'),
@@ -104,6 +106,8 @@ def connect_db():
     Connects to the specific database.
     """
     client = pymongo.MongoClient(host=app.config['DB_HOST'], port=app.config['DB_PORT'])
+    print(client)
+    print(app.config['DB_NAME'])
     return client[app.config['DB_NAME']]
 
 
@@ -496,8 +500,7 @@ def get_db():
     Opens a new database connection if there is none yet for the
     current application context.
     """
-    if not hasattr(g, 'db_conn'):
-        g.db_conn = connect_db()
+    if not hasattr(g, 'db_conn'): g.db_conn = connect_db()
     return g.db_conn
 
 
@@ -556,7 +559,6 @@ def variant_page(variant_str):
         # pos, ref, alt = get_minimal_representation(pos, ref, alt)
         xpos = get_xpos(chrom, pos)
         variant = lookups.get_variant(db, xpos, ref, alt)
-
         if variant is None:
             variant = {
                 'chrom': chrom,
@@ -644,18 +646,26 @@ def get_gene_page_content(gene_id):
         t = cache.get(cache_key)
         if t is None:
             variants_in_gene = lookups.get_variants_in_gene(db, gene_id)
-            print(len(variants_in_gene))
+            print('variants_in_gene',len(variants_in_gene))
             transcripts_in_gene = lookups.get_transcripts_in_gene(db, gene_id)
-
+            print('transcripts_in_gene',len(transcripts_in_gene))
             # Get some canonical transcript and corresponding info
             transcript_id = gene['canonical_transcript']
+# if none of the variants are on the canonical transcript use the transcript with the most variants on it
             transcript = lookups.get_transcript(db, transcript_id)
             variants_in_transcript = lookups.get_variants_in_transcript(db, transcript_id)
+            print('variants_in_transcript',len(variants_in_transcript))
             coverage_stats = lookups.get_coverage_for_transcript(db, transcript['xstart'] - EXON_PADDING, transcript['xstop'] + EXON_PADDING)
+            print('coverage_stats',len(coverage_stats))
             add_transcript_coordinate_to_variants(db, variants_in_transcript, transcript_id)
             constraint_info = lookups.get_constraint_for_transcript(db, transcript_id)
+            print('constraint_info',constraint_info)
 
-            t = render_template(
+            #print(gene)
+            #print(transcript)
+            #print(variants_in_gene)
+
+            t=render_template(
                 'gene.html',
                 gene=gene,
                 transcript=transcript,
@@ -665,12 +675,16 @@ def get_gene_page_content(gene_id):
                 coverage_stats=coverage_stats,
                 constraint=constraint_info
             )
+            print('all good')
             cache.set(cache_key, t, timeout=1000*60)
         print 'Rendering gene: %s' % gene_id
         return t
     except Exception, e:
-        print 'Failed on gene:', gene_id, ';Error=', e
-        abort(404)
+	print(dir(e))
+	print(e.args)
+	print(e.message)
+	print 'Failed on gene:', gene_id, ';Error=', e
+        #abort(404)
 
 
 @app.route('/transcript/<transcript_id>')
@@ -864,36 +878,28 @@ http://omim.org/entry/%(omim_accession)s''' % gene
 @app.route('/read_viz/<path:path>')
 def read_viz_files(path):
     full_path = os.path.abspath(os.path.join(app.config["READ_VIZ_DIR"], path))
-
     # security check - only files under READ_VIZ_DIR should be accsessible
     if not full_path.startswith(app.config["READ_VIZ_DIR"]):
         return "Invalid path: %s" % path
-
     logging.info("path: " + full_path)
-
     # handle igv.js Range header which it uses to request a subset of a .bam
     range_header = request.headers.get('Range', None)
     if not range_header:
         return send_from_directory(app.config["READ_VIZ_DIR"], path)
-
     m = re.search('(\d+)-(\d*)', range_header)
     if not m:
         error_msg = "ERROR: unexpected range header syntax: %s" % range_header
         logging.error(error_msg)
         return error_msg
-
     size = os.path.getsize(full_path)
     offset = int(m.group(1))
     length = int(m.group(2) or size) - offset
-
     data = None
     with open(full_path, 'rb') as f:
         f.seek(offset)
         data = f.read(length)
-
     rv = Response(data, 206, mimetype="application/octet-stream", direct_passthrough=True)
     rv.headers.add('Content-Range', 'bytes {0}-{1}/{2}'.format(offset, offset + length - 1, size))
-
     logging.info("GET range request: %s-%s %s" % (m.group(1), m.group(2), full_path))
     return rv
 
@@ -905,7 +911,8 @@ def apply_caching(response):
     return response
 
 if __name__ == "__main__":
-    app.run(host='0.0.0.0', port=8000)
+    app.run(host='0.0.0.0', port=8000, debug=True)
+    toolbar=DebugToolbarExtension(app)
     #runner = Runner(app)  # adds Flask command line options for setting host, port, etc.
     #runner.run()
 

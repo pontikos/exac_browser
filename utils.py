@@ -172,6 +172,8 @@ csq_order = ["transcript_ablation",
 "feature_elongation",
 "feature_truncation",
 "intergenic_variant",
+"start_lost",
+'protein_altering_variant',
 ""]
 csq_order_dict = dict(zip(csq_order, range(len(csq_order))))
 rev_csq_order_dict = dict(zip(range(len(csq_order)), csq_order))

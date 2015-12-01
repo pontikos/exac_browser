@@ -46,7 +46,7 @@ def get_base_coverage_from_file(base_coverage_file):
 
 def get_variants_from_sites_vcf(sites_vcf):
     """
-    Parse exac sites VCF file and return iter of variant dicts
+    Parse UCLex sites VCF file and return iter of variant dicts
     sites_vcf is a file (gzipped), not file path
     """
     vep_field_names = None
@@ -109,7 +109,8 @@ def get_variants_from_sites_vcf(sites_vcf):
                 variant['vep_annotations'] = vep_annotations
 
                 variant['allele_count'] = int(info_field['AC_Adj'].split(',')[i])
-                if not variant['allele_count'] and variant['filter'] == 'PASS': variant['filter'] = 'AC_Adj0' # Temporary filter
+                # WTF ?
+                #if not variant['allele_count'] and variant['filter'] == 'PASS': variant['filter'] = 'AC_Adj0' # Temporary filter
                 variant['allele_num'] = int(info_field['AN_Adj'])
 
                 if variant['allele_num'] > 0:
