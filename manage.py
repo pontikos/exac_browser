@@ -1,3 +1,5 @@
+#!/usr/bin/env python2
+
 from flask.ext.script import Manager
 from uclex import app
 import uclex

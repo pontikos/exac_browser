@@ -1,11 +1,10 @@
 import re
 from utils import *
+import itertools
 
 SEARCH_LIMIT = 10000
 # massive genes?
-UNSUPPORTED_QUERIES = ['TTN', 'ENSG00000155657', 'CMD1G', 'CMH9', 'CMPD4', 'FLJ32040', 'LGMD2J', 'MYLK5', 'TMD',
-                       u'ENST00000342175', u'ENST00000359218', u'ENST00000342992', u'ENST00000460472',
-                       u'ENST00000589042', u'ENST00000591111']
+#UNSUPPORTED_QUERIES = ['TTN', 'ENSG00000155657', 'CMD1G', 'CMH9', 'CMPD4', 'FLJ32040', 'LGMD2J', 'MYLK5', 'TMD', u'ENST00000342175', u'ENST00000359218', u'ENST00000342992', u'ENST00000460472', u'ENST00000589042', u'ENST00000591111']
 
 
 def get_gene(db, gene_id):
@@ -38,8 +37,8 @@ def get_raw_variant(db, xpos, ref, alt, get_id=False):
 
 def get_variant(db, xpos, ref, alt):
     variant = get_raw_variant(db, xpos, ref, alt, False)
-    if variant is None or 'rsid' not in variant:
-        return variant
+    print(variant)
+    if variant is None or 'rsid' not in variant: return variant
     if variant['rsid'] == '.' or variant['rsid'] is None:
         rsid = db.dbsnp.find_one({'xpos': xpos})
         if rsid:
@@ -130,8 +129,9 @@ def get_awesomebar_suggestions(g, query):
     If it is the prefix for a gene, return list of gene names
     """
     regex = re.compile('^' + re.escape(query), re.IGNORECASE)
-    results = [r for r in g.autocomplete_strings if regex.match(r)][:20]
-    return results
+    results = (r for r in g.autocomplete_strings if regex.match(r))
+    results = itertools.islice(results, 0, 20)
+    return list(results)
 
 
 # 1:1-1000
@@ -165,8 +165,6 @@ def get_awesomebar_result(db, query):
     """
     query = query.strip()
     print 'Query: %s' % query
-    if query.upper() in UNSUPPORTED_QUERIES:
-        return 'error', query
 
     # Variant
     variant = get_variants_by_rsid(db, query.lower())
@@ -231,10 +229,7 @@ def get_genes_in_region(db, chrom, start, stop):
     """
     xstart = get_xpos(chrom, start)
     xstop = get_xpos(chrom, stop)
-    genes = db.genes.find({
-        'xstart': {'$lte': xstop},
-        'xstop': {'$gte': xstart},
-    }, fields={'_id': False})
+    genes = db.genes.find({ 'xstart': {'$lte': xstop}, 'xstop': {'$gte': xstart}, }, fields={'_id': False})
     return list(genes)
 
 
@@ -258,7 +253,6 @@ def get_metrics(db, variant):
     metrics = {}
     for metric in METRICS:
         metrics[metric] = db.metrics.find_one({'metric': metric}, fields={'_id': False})
-
     metric = None
     if variant['allele_count'] == 1:
         metric = 'singleton'
@@ -310,7 +304,10 @@ def get_variants_in_transcript(db, transcript_id):
     """
     """
     variants = []
+    print('transcripts')
+    print(transcript_id)
     for variant in db.variants.find({'transcripts': transcript_id}, fields={'_id': False}):
+	print(variant)
         variant['vep_annotations'] = [x for x in variant['vep_annotations'] if x['Feature'] == transcript_id]
         add_consequence_to_variant(variant)
         remove_extraneous_information(variant)
@@ -325,3 +322,5 @@ def get_exons_in_transcript(db, transcript_id):
     #      if x['feature_type'] != 'exon'],
     #     key=lambda k: k['start'])
     return sorted(list(db.exons.find({'transcript_id': transcript_id, 'feature_type': { "$in": ['CDS', 'UTR', 'exon'] }}, fields={'_id': False})), key=lambda k: k['start'])
+
+

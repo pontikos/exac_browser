@@ -1,3 +1,5 @@
+#!/usr/bin/env python2
+
 import itertools
 import json
 import os
@@ -29,6 +31,9 @@ import time
 from functools import wraps
 from flask import request, Response
 
+from flask_debugtoolbar import DebugToolbarExtension
+from werkzeug.exceptions import default_exceptions, HTTPException
+
 import pandas
 
 #import pdb
@@ -36,15 +41,13 @@ import pandas
 logging.getLogger().addHandler(logging.StreamHandler())
 logging.getLogger().setLevel(logging.INFO)
 
-ADMINISTRATORS = (
-    'n.pontikos@ucl.ac.uk',
-)
+ADMINISTRATORS = ( 'n.pontikos@ucl.ac.uk',)
 
 app = Flask(__name__)
 mail_on_500(app, ADMINISTRATORS)
 Compress(app)
 app.config['COMPRESS_DEBUG'] = True
-cache = SimpleCache()
+cache = SimpleCache(default_timeout=60*60*24)
 
 EXAC_FILES_DIRECTORY='/data/uclex_data/'
 REGION_LIMIT = 1E5
@@ -53,13 +56,14 @@ EXON_PADDING = 50
 app.config.update(dict(
     DB_HOST='localhost',
     DB_PORT=27017,
-    DB_NAME='exac', 
+    DB_NAME='uclex', 
     DEBUG=True,
+    DEBUG_TB_TEMPLATE_EDITOR_ENABLED=True,
     SECRET_KEY='development key',
     LOAD_DB_PARALLEL_PROCESSES = 4,  # contigs assigned to threads, so good to make this a factor of 24 (eg. 2,3,4,6,8)
     #SITES_VCFS=glob.glob(os.path.join(os.path.dirname(__file__), EXAC_FILES_DIRECTORY, 'uclex.vep.vcf.gz')),
-    #SITES_VCFS=glob.glob(os.path.join(os.path.dirname(__file__), EXAC_FILES_DIRECTORY, 'mainset_November2015_chr*.vcf.gz')),
-    SITES_VCFS=glob.glob(os.path.join(os.path.dirname(__file__), EXAC_FILES_DIRECTORY, 'test.vcf.gz')),
+    #SITES_VCFS=glob.glob(os.path.join(os.path.dirname(__file__), EXAC_FILES_DIRECTORY, 'test.vcf.gz')),
+    SITES_VCFS=glob.glob(os.path.join(os.path.dirname(__file__), EXAC_FILES_DIRECTORY, 'mainset_November2015_chr*.vcf.gz')),
     GENCODE_GTF=os.path.join(os.path.dirname(__file__), EXAC_FILES_DIRECTORY, 'gencode.gtf.gz'),
     CANONICAL_TRANSCRIPT_FILE=os.path.join(os.path.dirname(__file__), EXAC_FILES_DIRECTORY, 'canonical_transcripts.txt.gz'),
     OMIM_FILE=os.path.join(os.path.dirname(__file__), EXAC_FILES_DIRECTORY, 'omim_info.txt.gz'),
@@ -104,6 +108,8 @@ def connect_db():
     Connects to the specific database.
     """
     client = pymongo.MongoClient(host=app.config['DB_HOST'], port=app.config['DB_PORT'])
+    print(client)
+    print(app.config['DB_NAME'])
     return client[app.config['DB_NAME']]
 
 
@@ -224,13 +230,13 @@ def load_mnps():
     db = get_db()
     start_time = time.time()
 
-    while db.variants.find_and_modify({'has_mnp': {'$eq' : True}}, {'$unset': {'has_mnp': '', 'mnps': ''}}):
-        pass
+    db.variants.ensure_index('has_mnp')
+    print 'Done indexing.'
+    while db.variants.find_and_modify({'has_mnp' : True}, {'$unset': {'has_mnp': '', 'mnps': ''}}): pass
     print 'Deleted MNP data.'
 
     with gzip.open(app.config['MNP_FILE']) as mnp_file:
         for mnp in get_mnp_data(mnp_file):
-            if not mnp['site2'].startswith('22-'): continue
             variant = lookups.get_raw_variant(db, mnp['xpos'], mnp['ref'], mnp['alt'], True)
             db.variants.find_and_modify({'_id': variant['_id']}, {'$set': {'has_mnp': True}, '$push': {'mnps': mnp}}, w=0)
 
@@ -420,8 +426,8 @@ def create_cache():
     for gene_id in GENES_TO_CACHE:
         try:
             page_content = get_gene_page_content(gene_id)
-        except Exception:
-            print Exception
+        except Exception as e:
+            print e
             continue
         f = open(os.path.join(GENE_CACHE_DIR, '{}.html'.format(gene_id)), 'w')
         f.write(page_content)
@@ -496,8 +502,7 @@ def get_db():
     Opens a new database connection if there is none yet for the
     current application context.
     """
-    if not hasattr(g, 'db_conn'):
-        g.db_conn = connect_db()
+    if not hasattr(g, 'db_conn'): g.db_conn = connect_db()
     return g.db_conn
 
 
@@ -511,7 +516,12 @@ def get_db():
 @app.route('/')
 @requires_auth
 def homepage():
-    return render_template('homepage.html')
+    cache_key = 't-homepage'
+    t = cache.get(cache_key)
+    if t is None:
+        t = render_template('homepage.html')
+        cache.set(cache_key, t)
+    return t
 
 
 @app.route('/autocomplete/<query>')
@@ -556,7 +566,6 @@ def variant_page(variant_str):
         # pos, ref, alt = get_minimal_representation(pos, ref, alt)
         xpos = get_xpos(chrom, pos)
         variant = lookups.get_variant(db, xpos, ref, alt)
-
         if variant is None:
             variant = {
                 'chrom': chrom,
@@ -622,7 +631,7 @@ def variant_page(variant_str):
             read_viz=read_viz_dict,
         )
     except Exception:
-        print 'Failed on variant:', variant_str, '; Error=', traceback.format_exc()
+        print 'Failed on variant:', variant_str, ';Error=', traceback.format_exc()
         abort(404)
 
 
@@ -642,20 +651,29 @@ def get_gene_page_content(gene_id):
             abort(404)
         cache_key = 't-gene-{}'.format(gene_id)
         t = cache.get(cache_key)
+        print 'Rendering %sgene: %s' % ('' if t is None else 'cached ', gene_id)
         if t is None:
             variants_in_gene = lookups.get_variants_in_gene(db, gene_id)
-            print(len(variants_in_gene))
+            print('variants_in_gene',len(variants_in_gene))
             transcripts_in_gene = lookups.get_transcripts_in_gene(db, gene_id)
-
+            print('transcripts_in_gene',len(transcripts_in_gene))
             # Get some canonical transcript and corresponding info
             transcript_id = gene['canonical_transcript']
+# if none of the variants are on the canonical transcript use the transcript with the most variants on it
             transcript = lookups.get_transcript(db, transcript_id)
             variants_in_transcript = lookups.get_variants_in_transcript(db, transcript_id)
+            print('variants_in_transcript',len(variants_in_transcript))
             coverage_stats = lookups.get_coverage_for_transcript(db, transcript['xstart'] - EXON_PADDING, transcript['xstop'] + EXON_PADDING)
+            print('coverage_stats',len(coverage_stats))
             add_transcript_coordinate_to_variants(db, variants_in_transcript, transcript_id)
             constraint_info = lookups.get_constraint_for_transcript(db, transcript_id)
+            print('constraint_info',constraint_info)
 
-            t = render_template(
+            #print(gene)
+            #print(transcript)
+            #print(variants_in_gene)
+
+            t=render_template(
                 'gene.html',
                 gene=gene,
                 transcript=transcript,
@@ -663,14 +681,19 @@ def get_gene_page_content(gene_id):
                 variants_in_transcript=variants_in_transcript,
                 transcripts_in_gene=transcripts_in_gene,
                 coverage_stats=coverage_stats,
-                constraint=constraint_info
+                constraint=constraint_info,
+                csq_order=csq_order,
             )
+            print('all good')
             cache.set(cache_key, t, timeout=1000*60)
         print 'Rendering gene: %s' % gene_id
         return t
     except Exception, e:
-        print 'Failed on gene:', gene_id, ';Error=', e
-        abort(404)
+	print(dir(e))
+	print(e.args)
+	print(e.message)
+	print 'Failed on gene:', gene_id, ';Error=', e
+        #abort(404)
 
 
 @app.route('/transcript/<transcript_id>')
@@ -681,6 +704,7 @@ def transcript_page(transcript_id):
 
         cache_key = 't-transcript-{}'.format(transcript_id)
         t = cache.get(cache_key)
+        print 'Rendering %stranscript: %s' % ('' if t is None else 'cached ', transcript_id)
         if t is None:
 
             gene = lookups.get_gene(db, transcript['gene_id'])
@@ -701,12 +725,12 @@ def transcript_page(transcript_id):
                 coverage_stats_json=json.dumps(coverage_stats),
                 gene=gene,
                 gene_json=json.dumps(gene),
+                csq_order=csq_order,
             )
-            cache.set(cache_key, t, timeout=1000*60)
-        print 'Rendering transcript: %s' % transcript_id
+            cache.set(cache_key, t)
         return t
     except Exception, e:
-        print 'Failed on transcript:', transcript_id, ';Error=', e
+        print 'Failed on transcript:', transcript_id, ';Error=', traceback.format_exc()
         abort(404)
 
 
@@ -717,6 +741,7 @@ def region_page(region_id):
         region = region_id.split('-')
         cache_key = 't-region-{}'.format(region_id)
         t = cache.get(cache_key)
+        print 'Rendering %sregion: %s' % ('' if t is None else 'cached ', region_id)
         if t is None:
             chrom = region[0]
             start = None
@@ -733,7 +758,8 @@ def region_page(region_id):
                     chrom=chrom,
                     start=start,
                     stop=stop,
-                    coverage=None
+                    coverage=None,
+                    csq_order=csq_order,
                 )
             if start == stop:
                 start -= 20
@@ -750,12 +776,13 @@ def region_page(region_id):
                 chrom=chrom,
                 start=start,
                 stop=stop,
-                coverage=coverage_array
+                coverage=coverage_array,
+                csq_order=csq_order,
             )
-        print 'Rendering region: %s' % region_id
+            cache.set(cache_key, t)
         return t
     except Exception, e:
-        print 'Failed on region:', region_id, ';Error=', e
+        print 'Failed on region:', region_id, ';Error=', traceback.format_exc()
         abort(404)
 
 
@@ -776,10 +803,11 @@ def dbsnp_page(rsid):
             start=start,
             stop=stop,
             coverage=None,
-            genes_in_region=None
+            genes_in_region=None,
+            csq_order=csq_order,
         )
     except Exception, e:
-        print 'Failed on rsid:', rsid, ';Error=', e
+        print 'Failed on rsid:', rsid, ';Error=', traceback.format_exc()
         abort(404)
 
 
@@ -794,14 +822,9 @@ def not_found_page(query):
 @app.route('/error/<query>')
 @app.errorhandler(404)
 def error_page(query):
-    if type(query) == str or type(query) == unicode:
-        unsupported = "TTN" if query.upper() in lookups.UNSUPPORTED_QUERIES else None
-    else:
-        unsupported = None
     return render_template(
         'error.html',
-        query=query,
-        unsupported=unsupported
+        query=query
     )
 
 
@@ -864,36 +887,28 @@ http://omim.org/entry/%(omim_accession)s''' % gene
 @app.route('/read_viz/<path:path>')
 def read_viz_files(path):
     full_path = os.path.abspath(os.path.join(app.config["READ_VIZ_DIR"], path))
-
     # security check - only files under READ_VIZ_DIR should be accsessible
     if not full_path.startswith(app.config["READ_VIZ_DIR"]):
         return "Invalid path: %s" % path
-
     logging.info("path: " + full_path)
-
     # handle igv.js Range header which it uses to request a subset of a .bam
     range_header = request.headers.get('Range', None)
     if not range_header:
         return send_from_directory(app.config["READ_VIZ_DIR"], path)
-
     m = re.search('(\d+)-(\d*)', range_header)
     if not m:
         error_msg = "ERROR: unexpected range header syntax: %s" % range_header
         logging.error(error_msg)
         return error_msg
-
     size = os.path.getsize(full_path)
     offset = int(m.group(1))
     length = int(m.group(2) or size) - offset
-
     data = None
     with open(full_path, 'rb') as f:
         f.seek(offset)
         data = f.read(length)
-
     rv = Response(data, 206, mimetype="application/octet-stream", direct_passthrough=True)
     rv.headers.add('Content-Range', 'bytes {0}-{1}/{2}'.format(offset, offset + length - 1, size))
-
     logging.info("GET range request: %s-%s %s" % (m.group(1), m.group(2), full_path))
     return rv
 
@@ -905,7 +920,8 @@ def apply_caching(response):
     return response
 
 if __name__ == "__main__":
-    app.run(host='0.0.0.0', port=8000)
+    app.run(host='0.0.0.0', port=8000, debug=True)
+    toolbar=DebugToolbarExtension(app)
     #runner = Runner(app)  # adds Flask command line options for setting host, port, etc.
     #runner.run()
 
