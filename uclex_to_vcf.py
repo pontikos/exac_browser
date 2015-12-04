@@ -26,6 +26,7 @@ import numpy
 import cPickle as pickle
 # python data tables!
 import pandas
+from collections import defaultdict
 
 #BASEDIR='~pontikos'
 #BASEDIR='/Users/pontikos/'
@@ -95,30 +96,60 @@ vcf=pysam.VariantFile(vcf_file,'r')
 #print(chrom, pos, mu, med, ' '.join(['%.4f'%(float(len(filter(lambda x: x>t, dp)))/float(n)) for t in thresh]))
 
 for v in vcf:
-    if ',' in v.alts: continue
     # we only care about coding variants
     if 'CSQ' not in v.info.keys(): continue
-    ac=dict()
+    ac=defaultdict(list)
     genotypes=dict([(s,v.samples[s]['GT'],) for s in v.samples])
     geno=[v.samples[s]['GT'] for s in v.samples]
-    ac['AC_Het']=geno.count('0/1')
-    ac['AC_Hom']=geno.count('1/1')
-    ac['AC']=ac['AC_Het']+2*ac['AC_Hom']
-    #ac['AC_Adj']
-    ac['AN']=2*len(geno)
-    ac['AF']=float(ac['AC'])/float(ac['AN'])
-    for p in phenoSample:
-        g=[genotypes[s] for s in phenoSample[p]]
-        het=[g.count((v.ref,v.alts[i])) for i in range(0,len(v.alts))]
-        hom=[g.count((v.alts[i],v.alts[i])) for i in range(0,len(v.alts))]
-        ac['Hom_%s'%POPS.loc[p]['code']]=','.join(map(lambda x: str(x), hom))
-        ac['Het_%s'%POPS.loc[p]['code']]=','.join(map(lambda x: str(x), het))
-        ac['AC_%s'%POPS.loc[p]['code']]=','.join([str(het[i]+2*hom[i]) for i in range(0,len(v.alts))])
-        ac['AN_%s'%POPS.loc[p]['code']]=2*len(g)
-        #print( p, len(g), g.count('./.'), g.count('0/0'), g.count('0/1'), g.count('1/1') )
-    ac['AC_Adj']=ac['AC']
-    ac['AN_Adj']=ac['AN']
-    ##INFO=<ID=CSQ,Number=.,Type=String,Description="Consequence annotations from Ensembl VEP. Format: Allele|Consequence|IMPACT|SYMBOL|Gene|Feature_type|Feature|BIOTYPE|EXON|INTRON|HGVSc|HGVSp|cDNA_position|CDS_position|Protein_position|Amino_acids|Codons|Existing_variation|DISTANCE|STRAND|SYMBOL_SOURCE|HGNC_ID|CANONICAL|SIFT|PolyPhen|GMAF|AFR_MAF|AMR_MAF|EAS_MAF|EUR_MAF|SAS_MAF|AA_MAF|EA_MAF|CLIN_SIG|SOMATIC|PHENO|Condel|CAROL|CADD_PHRED|CADD_RAW|GO|ExAC_AF|ExAC_AF_AFR|ExAC_AF_AMR|ExAC_AF_EAS|ExAC_AF_FIN|ExAC_AF_NFE|ExAC_AF_OTH|ExAC_AF_SAS">
+    for i,alt_allele, in enumerate(v.alts):
+        het=geno.count((v.ref,alt_allele))
+        hom=geno.count((alt_allele,alt_allele))
+        ac['AC_Het'].append(het)
+        #','.join(map(lambda x: str(x), [geno.count((v.ref,v.alts[i])) for i in range(0,len(v.alts))]))
+        ac['AC_Hom'].append(hom)
+        #','.join(map(lambda x: str(x), [geno.count((v.alts[i],v.alts[i])) for i in range(0,len(v.alts))]))
+        AC=het+2*hom
+        ac['AC'].append(AC)
+        #','.join([int(x)+2*int(y) for x, y, in zip(ac['AC_Het'].split(','),ac['AC_Hom'].split(','))])
+        AN=2*len(geno)
+        ac['AN'].append(AN)
+        ac['AF'].append(float(AC)/float(AN))
+        if v.chrom == 'X':
+            #AC_Hemi is a count Male alt alleles, where each site (excluding PAR) only has one allele.
+            #AC_Hom is a count of Female alt alleles
+            #AC_Het is a count of Female alt alleles
+            #chrX (non-PAR)
+            #sum(AC_Adj) = sum(AC_Hemi) + sum(AC_Het) + 2*sum(AC_Hom) 
+            #AN_Adj (and all population AN on chrX) = 2*n_Female + n_Male
+            #AN_Adj (and all population AN on chrY) = n_Male
+            #ac['AC_Hemi'].append(
+            #sum(AC_Adj) = sum(AC_Hemi) + sum(AC_Het) + 2*sum(AC_Hom) 
+            ac['AC_Adj'].append(AC)
+            #AN_Adj (and all population AN on chrX) = 2*n_Female + n_Male
+            ac['AN_Adj'].append(AN)
+        elif v.chrom == 'Y':
+            #For chrY
+            #sum(AC_Adj) = sum(AC_Hemi) 
+            #sum(AC_Adj) = sum(AC_Hemi) 
+            #AN_Adj (and all population AN on chrY) = n_Male
+            ac['AC_Adj'].append(AC)
+            ac['AN_Adj'].append(AN)
+        else:
+            ac['AC_Adj'].append(AC)
+            ac['AN_Adj'].append(AN)
+        for p in phenoSample:
+            g=[genotypes[s] for s in phenoSample[p]]
+            het=g.count((v.ref,alt_allele))
+            hom=g.count((v.alts[i],alt_allele))
+            ac['Hom_%s'%POPS.loc[p]['code']].append(hom)
+            ac['Het_%s'%POPS.loc[p]['code']].append(het)
+            ac['AC_%s'%POPS.loc[p]['code']].append(het+2*hom)
+            ac['AN_%s'%POPS.loc[p]['code']].append(2*len(g))
+            #print( p, len(g), g.count('./.'), g.count('0/0'), g.count('0/1'), g.count('1/1') )
+        ##INFO=<ID=CSQ,Number=.,Type=String,Description="Consequence annotations from Ensembl VEP. Format: Allele|Consequence|IMPACT|SYMBOL|Gene|Feature_type|Feature|BIOTYPE|EXON|INTRON|HGVSc|HGVSp|cDNA_position|CDS_position|Protein_position|Amino_acids|Codons|Existing_variation|DISTANCE|STRAND|SYMBOL_SOURCE|HGNC_ID|CANONICAL|SIFT|PolyPhen|GMAF|AFR_MAF|AMR_MAF|EAS_MAF|EUR_MAF|SAS_MAF|AA_MAF|EA_MAF|CLIN_SIG|SOMATIC|PHENO|Condel|CAROL|CADD_PHRED|CADD_RAW|GO|ExAC_AF|ExAC_AF_AFR|ExAC_AF_AMR|ExAC_AF_EAS|ExAC_AF_FIN|ExAC_AF_NFE|ExAC_AF_OTH|ExAC_AF_SAS">
+    print([','.join(map(lambda x: str(x), ac[k])) for k in ac])
+    if len(v.alts)>1: break
+#','.join(map(lambda x: str(x), ac
     CSQ=dict(zip("Allele|Consequence|IMPACT|SYMBOL|Gene|Feature_type|Feature|BIOTYPE|EXON|INTRON|HGVSc|HGVSp|cDNA_position|CDS_position|Protein_position|Amino_acids|Codons|Existing_variation|DISTANCE|STRAND|SYMBOL_SOURCE|HGNC_ID|CANONICAL|SIFT|PolyPhen|GMAF|AFR_MAF|AMR_MAF|EAS_MAF|EUR_MAF|SAS_MAF|AA_MAF|EA_MAF|CLIN_SIG|SOMATIC|PHENO|Condel|CAROL|CADD_PHRED|CADD_RAW|GO|ExAC_AF|ExAC_AF_AFR|ExAC_AF_AMR|ExAC_AF_EAS|ExAC_AF_FIN|ExAC_AF_NFE|ExAC_AF_OTH|ExAC_AF_SAS".split('|'), v.info['CSQ'].split('|')))
     ##INFO=<ID=CSQ,Number=.,Type=String,Description="Consequence type as predicted by VEP. Format: Allele|Gene|Feature|Feature_type|Consequence|cDNA_position|CDS_position|Protein_position|Amino_acids|Codons|Existing_variation|ALLELE_NUM|DISTANCE|STRAND|SYMBOL|SYMBOL_SOURCE|HGNC_ID|BIOTYPE|CANONICAL|CCDS|ENSP|SWISSPROT|TREMBL|UNIPARC|SIFT|PolyPhen|EXON|INTRON|DOMAINS|HGVSc|HGVSp|GMAF|AFR_MAF|AMR_MAF|ASN_MAF|EUR_MAF|AA_MAF|EA_MAF|CLIN_SIG|SOMATIC|PUBMED|MOTIF_NAME|MOTIF_POS|HIGH_INF_POS|MOTIF_SCORE_CHANGE|LoF_info|LoF_flags|LoF_filter|LoF">
     INFO = dict(v.info.items())
@@ -128,7 +159,10 @@ for v in vcf:
     INFO=';'.join(['%s=%s' % (a, b,) for a, b, in INFO] )
     #H=['#CHROM','POS','ID','REF','ALT','QUAL','FILTER','INFO']
     #print('\t'.join( [v[k] for k in H] ))
-    print('\t'.join(map(lambda x: str(x), [v.chrom,v.pos,v.id or '.',v.ref,','.join(v.alts),v.qual,v.filter.values() or '.',INFO])))
+    FILTER=','.join([v.filter[k].name for k in v.filter]) or '.'
+    print('\t'.join(map(lambda x: str(x), [v.chrom,v.pos,v.id or '.',v.ref,','.join(v.alts),v.qual,FILTER,INFO])))
+    #print(v.filter.values())
+    #print(dir(v.filter))
 
 
     
