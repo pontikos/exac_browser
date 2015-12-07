@@ -3,8 +3,12 @@ This code has been forked from the ExAC browser for the purpose of the exomes ho
 Usage
 =======
 
-Access
+[http://phenotips.cs.ucl.ac.uk:8000](http://phenotips.cs.ucl.ac.uk:8000)
+
+
+Access outside of UCL
 ======
+
 The website is currently only accessible if you are on the UCL wired network but you can access it from outside the network by using an ssh tunnel:
 
 ```
