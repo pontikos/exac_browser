@@ -3,6 +3,16 @@ This code has been forked from the ExAC browser for the purpose of the exomes ho
 Usage
 =======
 
+Access
+======
+The website is currently only accessible if you are on the UCL wired network but you can access it from outside the network by using an ssh tunnel:
+
+```
+ssh -f <username>@jb-gate1.biol.ucl.ac.uk -L1234:phenotips.cs.ucl.ac.uk:8000 -N
+```
+
+Then point your browser to [http://localhost:1234](http://localhost:1234).
+
 Installation
 =======
 
