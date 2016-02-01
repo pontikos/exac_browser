@@ -640,6 +640,11 @@ def variant_page(variant_str):
         abort(404)
 
 
+@app.route('/variant2/<variant_str>')
+def variant_page2(variant_str):
+    print(variant_str)
+    return('hello')
+
 @app.route('/gene/<gene_id>')
 def gene_page(gene_id):
     if gene_id in GENES_TO_CACHE:
