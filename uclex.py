@@ -19,7 +19,7 @@ from flask.ext.runner import Runner
 from flask_errormail import mail_on_500
 
 from flask import Response
-from collections import defaultdict
+from collections import defaultdict, Counter
 from werkzeug.contrib.cache import SimpleCache
 
 from multiprocessing import Process
@@ -85,6 +85,7 @@ GENE_CACHE_DIR = os.path.join(os.path.dirname(__file__), 'gene_cache')
 GENES_TO_CACHE = {l.strip('\n') for l in open(os.path.join(os.path.dirname(__file__), 'genes_to_cache.txt'))}
 
 
+
 def check_auth(username, password):
     """This function is called to check if a username / password combination is valid.  """
     return username == 'admin' and password == 'secret'
@@ -129,7 +130,8 @@ def parse_tabix_file_subset(tabix_filenames, subset_i, subset_n, record_parser):
     print(tabix_filenames)
     open_tabix_files = [pysam.Tabixfile(tabix_filename) for tabix_filename in tabix_filenames]
     tabix_file_contig_pairs = [(tabix_file, contig) for tabix_file in open_tabix_files for contig in tabix_file.contigs]
-    tabix_file_contig_subset = tabix_file_contig_pairs[subset_i : : subset_n]  # get every n'th tabix_file/contig pair
+    # get every n'th tabix_file/contig pair
+    tabix_file_contig_subset = tabix_file_contig_pairs[subset_i : : subset_n]
     short_filenames = ", ".join(map(os.path.basename, tabix_filenames))
     print(short_filenames)
     num_file_contig_pairs = len(tabix_file_contig_subset)
@@ -141,7 +143,6 @@ def parse_tabix_file_subset(tabix_filenames, subset_i, subset_n, record_parser):
         for parsed_record in record_parser(itertools.chain(header_iterator, records_iterator)):
             counter += 1
             yield parsed_record
-
             if counter % 100000 == 0:
                 seconds_elapsed = int(time.time()-start_time)
                 print(("Loaded %(counter)s records from subset %(subset_i)s of %(subset_n)s from %(short_filenames)s "
@@ -155,15 +156,15 @@ def load_base_coverage():
         coverage_generator = parse_tabix_file_subset(coverage_files, i, n, get_base_coverage_from_file)
         try:
             db.base_coverage.insert(coverage_generator, w=0)
-        except pymongo.errors.InvalidOperation:
-            pass  # handle error when coverage_generator is empty
-
+        except pymongo.errors.InvalidOperation, e:
+            print(e)
+            # handle error when coverage_generator is empty
+            pass  
     db = get_db()
     db.base_coverage.drop()
     print("Dropped db.base_coverage")
     # load coverage first; variant info will depend on coverage
     db.base_coverage.ensure_index('xpos')
-
     procs = []
     coverage_files = app.config['BASE_COVERAGE_FILES']
     num_procs = app.config['LOAD_DB_PARALLEL_PROCESSES']
@@ -173,18 +174,17 @@ def load_base_coverage():
         p.start()
         procs.append(p)
     return procs
-
     #print 'Done loading coverage. Took %s seconds' % int(time.time() - start_time)
 
 
 def load_variants_file():
     def load_variants(sites_file, i, n, db):
-	for f in sites_file:
-		variants_generator = parse_tabix_file_subset([f], i, n, get_variants_from_sites_vcf)
-		try:
-		    db.variants.insert(variants_generator, w=0)
-		except pymongo.errors.InvalidOperation:
-		    pass  # handle error when variant_generator is empty
+        for f in sites_file:
+            variants_generator = parse_tabix_file_subset([f], i, n, get_variants_from_sites_vcf)
+            try:
+                db.variants.insert(variants_generator, w=0)
+            except pymongo.errors.InvalidOperation:
+                pass  # handle error when variant_generator is empty
     db = get_db()
     db.variants.drop()
     print("Dropped db.variants")
@@ -536,23 +536,28 @@ def awesome_autocomplete(query):
 def awesome():
     db = get_db()
     query = request.args.get('query')
+    #for n in dir(request): print(n, getattr(request,n))
+    #print(request.HTTP_REFERER)
+    if request.referrer:
+        referrer=request.referrer
+    else:
+        referrer=''
     datatype, identifier = lookups.get_awesomebar_result(db, query)
-
     print "Searched for %s: %s" % (datatype, identifier)
     if datatype == 'gene':
-        return redirect('/gene/{}'.format(identifier))
+        return redirect('{}gene/{}'.format(referrer,identifier))
     elif datatype == 'transcript':
-        return redirect('/transcript/{}'.format(identifier))
+        return redirect('{}transcript/{}'.format(referrer,identifier))
     elif datatype == 'variant':
-        return redirect('/variant/{}'.format(identifier))
+        return redirect('{}variant/{}'.format(referrer,identifier))
     elif datatype == 'region':
-        return redirect('/region/{}'.format(identifier))
+        return redirect('{}region/{}'.format(referrer,identifier))
     elif datatype == 'dbsnp_variant_set':
-        return redirect('/dbsnp/{}'.format(identifier))
+        return redirect('{}dbsnp/{}'.format(referrer,identifier))
     elif datatype == 'error':
-        return redirect('/error/{}'.format(identifier))
+        return redirect('{}error/{}'.format(referrer,identifier))
     elif datatype == 'not_found':
-        return redirect('/not_found/{}'.format(identifier))
+        return redirect('{}not_found/{}'.format(referrer,identifier))
     else:
         raise Exception
 
@@ -655,11 +660,17 @@ def get_gene_page_content(gene_id):
         if t is None:
             variants_in_gene = lookups.get_variants_in_gene(db, gene_id)
             print('variants_in_gene',len(variants_in_gene))
+            # which transcript contains most of the variants
+            transcript_counter=Counter([t for v in variants_in_gene for t in v['transcripts'] ])
+            print(transcript_counter)
+            transcript_with_most_variants=transcript_counter.most_common(1)[0][0]
+            print('transcript with most variants',transcript_with_most_variants)
             transcripts_in_gene = lookups.get_transcripts_in_gene(db, gene_id)
             print('transcripts_in_gene',len(transcripts_in_gene))
             # Get some canonical transcript and corresponding info
-            transcript_id = gene['canonical_transcript']
-# if none of the variants are on the canonical transcript use the transcript with the most variants on it
+            #transcript_id = gene['canonical_transcript']
+            transcript_id = transcript_with_most_variants
+            # if none of the variants are on the canonical transcript use the transcript with the most variants on it
             transcript = lookups.get_transcript(db, transcript_id)
             variants_in_transcript = lookups.get_variants_in_transcript(db, transcript_id)
             print('variants_in_transcript',len(variants_in_transcript))
@@ -671,7 +682,7 @@ def get_gene_page_content(gene_id):
 
             #print(gene)
             #print(transcript)
-            #print(variants_in_gene)
+            print(variants_in_gene)
 
             t=render_template(
                 'gene.html',
@@ -920,8 +931,28 @@ def apply_caching(response):
     return response
 
 if __name__ == "__main__":
-    app.run(host='0.0.0.0', port=8000, debug=True)
-    toolbar=DebugToolbarExtension(app)
+    # use ssl
+    #from OpenSSL import SSL
+    # altnerative
+    import ssl
+    #context = SSL.Context(SSL.SSLv23_METHOD)
+    #context = ssl.SSLContext(ssl.PROTOCOL_SSLv23)
+    #context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
+    #context.load_cert_chain( '/home/rmhanpo/phenotips.crt', '/home/rmhanpo/phenotips.key' )
+    #context.use_privatekey_file('/home/rmhanpo/ssl/phenotips.cs.ucl.ac.uk.key')
+    #context.use_privatekey_file('/home/rmhanpo/ssl/phenotips.cs.ucl.ac.uk.key')
+    #context.use_privatekey_file('/home/rmhanpo/phenotips.key')
+    #context.use_certificate_file('/home/rmhanpo/phenotips.crt')
+    context=( '/home/rmhanpo/keys/host.crt', '/home/rmhanpo/keys/host.key')
+    context=( '/home/rmhanpo/keys/phenotips.crt', '/home/rmhanpo/keys/phenotips.key')
+    app.run(host='0.0.0.0',port=8000)
+    #app.run(host='127.0.0.1',port=8000, debug = True, ssl_context=context)
+    #app.run(host='0.0.0.0', port=8000, ssl_context=context)
+    #app.run(host='0.0.0.0', port=8000, debug=True, ssl_context='adhoc')
+    #app.run(host='0.0.0.0', port=8000, debug=True)
+    #app.run(host='127.0.0.1', port=8000, debug=True)
+    #app.run(host='0.0.0.0', port=8000, debug=True, ssl_context=('/home/rmhanpo/phenotips.key', '/home/rmhanpo/phenotips.crt'))
+    #toolbar=DebugToolbarExtension(app)
     #runner = Runner(app)  # adds Flask command line options for setting host, port, etc.
     #runner.run()
 
