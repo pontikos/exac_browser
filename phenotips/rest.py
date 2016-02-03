@@ -160,3 +160,20 @@ def dump_hpo_to_json(outFile, owner, password):
         json_patient=io.getvalue()
         print(json_patient)
 
+
+def dump_to_mongodb(user, password):
+    import pymongo
+    client = pymongo.MongoClient(host='localhost', port=27017)
+    db=client['exac']
+    db.patients.drop()
+    db.patients.ensure_index('external_id')
+    db.patients.ensure_index('report_id')
+    auth='%s:%s' % (user, password,)
+    patients=get_patient(auth)['patientSummaries']
+    for p in patients:
+        eid=p['eid']
+        print(eid)
+        p=get_patient(auth,eid)
+        db.patients.insert(p,w=0)
+
+
