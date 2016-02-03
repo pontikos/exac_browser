@@ -5,7 +5,6 @@ import datetime
 
 now = datetime.datetime.now()
 
-# .password
 auth=sys.argv[1]
 
 patients=rest.get_patient(auth)['patientSummaries']

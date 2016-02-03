@@ -20,7 +20,6 @@ import pandas
 from browser import Browser
 
 b=Browser('localhost:8080',debug=True,print_requests=True)
-#b=Browser('phenotips.cs.ucl.ac.uk:8080',debug=False,print_requests=False)
 
 # get patient with eid or all patients if not
 # specified
