@@ -29,7 +29,6 @@ def get_base_coverage_from_file(base_coverage_file):
         '100': 0.0,
     }
     """
-
     float_header_fields = ['mean', 'median', '1', '5', '10', '15', '20', '25', '30', '50', '100']
     for line in base_coverage_file:
         if line.startswith('#'):
@@ -53,15 +52,10 @@ def get_variants_from_sites_vcf(sites_vcf):
     for line in sites_vcf:
         try:
             line = line.strip('\n')
-            if line.startswith('##INFO=<ID=CSQ'):
-                vep_field_names = line.split('Format: ')[-1].strip('">').split('|')
-            if line.startswith('##INFO=<ID=DP_HIST'):
-                dp_mids = map(float, line.split('Mids: ')[-1].strip('">').split('|'))
-            if line.startswith('##INFO=<ID=GQ_HIST'):
-                gq_mids = map(float, line.split('Mids: ')[-1].strip('">').split('|'))
-            if line.startswith('#'):
-                continue
-
+            if line.startswith('##INFO=<ID=CSQ'): vep_field_names = line.split('Format: ')[-1].strip('">').split('|')
+            if line.startswith('##INFO=<ID=DP_HIST'): dp_mids = map(float, line.split('Mids: ')[-1].strip('">').split('|'))
+            if line.startswith('##INFO=<ID=GQ_HIST'): gq_mids = map(float, line.split('Mids: ')[-1].strip('">').split('|'))
+            if line.startswith('#'): continue
             # If we get here, it's a variant line
             if vep_field_names is None: raise Exception("VEP_field_names is None. Make sure VCF header is present.")
             # This elegant parsing code below is copied from https://github.com/konradjk/loftee
@@ -70,26 +64,20 @@ def get_variants_from_sites_vcf(sites_vcf):
             consequence_array = info_field['CSQ'].split(',') if 'CSQ' in info_field else []
             annotations = [dict(zip(vep_field_names, x.split('|'))) for x in consequence_array if len(vep_field_names) == len(x.split('|'))]
             coding_annotations = [ann for ann in annotations if ann['Feature'].startswith('ENST')]
-
             alt_alleles = fields[4].split(',')
-
             # skip multi alleles for now as I haven't parsed them properly yet
-            if len(alt_alleles)>1: continue
+            #if len(alt_alleles)>1: continue
             #also skip chrom X and Y
             if fields[0]=='X' or fields[0]=='Y': continue
-
             # different variant for each alt allele
             for i, alt_allele in enumerate(alt_alleles):
-
                 #vep_annotations = [ann for ann in coding_annotations if int(ann['ALLELE_NUM']) == i + 1]
                 vep_annotations = coding_annotations
                 #print(vep_annotations)
-
                 # Variant is just a dict
                 # Make a copy of the info_field dict - so all the original data remains
                 # Add some new keys that are allele-specific
                 pos, ref, alt = get_minimal_representation(fields[1], fields[3], alt_allele)
-
                 variant = {}
                 variant['chrom'] = fields[0]
                 variant['pos'] = pos
@@ -107,36 +95,31 @@ def get_variants_from_sites_vcf(sites_vcf):
                 variant['site_quality'] = float(fields[5])
                 variant['filter'] = fields[6]
                 variant['vep_annotations'] = vep_annotations
-
                 variant['allele_count'] = int(info_field['AC_Adj'].split(',')[i])
                 # WTF ?
                 #if not variant['allele_count'] and variant['filter'] == 'PASS': variant['filter'] = 'AC_Adj0' # Temporary filter
-                variant['allele_num'] = int(info_field['AN_Adj'])
-
+                variant['allele_num'] = int(info_field['AN_Adj'].split(',')[0])
                 if variant['allele_num'] > 0:
-                    variant['allele_freq'] = variant['allele_count']/float(info_field['AN_Adj'])
+                    variant['allele_freq'] = variant['allele_count']/float(info_field['AN_Adj'].split(',')[0])
                 else:
                     variant['allele_freq'] = None
-
-                variant['pop_acs'] = dict([(POPS[x], int(info_field['AC_%s' % x].split(',')[i])) for x in POPS])
-                variant['pop_ans'] = dict([(POPS[x], int(info_field['AN_%s' % x])) for x in POPS])
+                variant['pop_acs'] = dict([(POPS[x], int(info_field['AC_%s' % x].split(',')[i]),) for x in POPS])
+                variant['pop_ans'] = dict([(POPS[x], int(info_field['AN_%s' % x].split(',')[0]),) for x in POPS])
                 variant['pop_homs'] = dict([(POPS[x], int(info_field['Hom_%s' % x].split(',')[i])) for x in POPS])
                 variant['hom_count'] = sum(variant['pop_homs'].values())
                 if variant['chrom'] in ('X', 'Y'):
                     variant['pop_hemis'] = dict([(POPS[x], int(info_field['Hemi_%s' % x].split(',')[i])) for x in POPS])
                     variant['hemi_count'] = sum(variant['pop_hemis'].values())
                 variant['quality_metrics'] = dict([(x, info_field[x]) for x in METRICS if x in info_field])
-
                 variant['genes'] = list({annotation['Gene'] for annotation in vep_annotations})
                 variant['transcripts'] = list({annotation['Feature'] for annotation in vep_annotations})
-
                 if 'DP_HIST' in info_field:
                     hists_all = [info_field['DP_HIST'].split(',')[0], info_field['DP_HIST'].split(',')[i+1]]
                     variant['genotype_depths'] = [zip(dp_mids, map(int, x.split('|'))) for x in hists_all]
                 if 'GQ_HIST' in info_field:
                     hists_all = [info_field['GQ_HIST'].split(',')[0], info_field['GQ_HIST'].split(',')[i+1]]
                     variant['genotype_qualities'] = [zip(gq_mids, map(int, x.split('|'))) for x in hists_all]
-                print(variant)
+                #print(variant)
                 yield variant
         except Exception:
             print("Error parsing vcf line: " + line)

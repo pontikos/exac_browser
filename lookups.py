@@ -1,6 +1,10 @@
 import re
 from utils import *
 import itertools
+import pysam
+import csv
+#hpo lookup
+import phizz
 
 SEARCH_LIMIT = 10000
 # massive genes?
@@ -165,7 +169,6 @@ def get_awesomebar_result(db, query):
     """
     query = query.strip()
     print 'Query: %s' % query
-
     # Variant
     variant = get_variants_by_rsid(db, query.lower())
     if variant:
@@ -178,24 +181,20 @@ def get_awesomebar_result(db, query):
         return 'variant', variant[0]['variant_id']
     # variant = get_variant(db, )
     # TODO - https://github.com/brettpthomas/exac_browser/issues/14
-
     gene = get_gene_by_name(db, query)
     if gene:
         return 'gene', gene['gene_id']
-
     # From here out, all should be uppercase (gene, tx, region, variant_id)
     query = query.upper()
     gene = get_gene_by_name(db, query)
     if gene:
         return 'gene', gene['gene_id']
-
     # Ensembl formatted queries
     if query.startswith('ENS'):
         # Gene
         gene = get_gene(db, query)
         if gene:
             return 'gene', gene['gene_id']
-
         # Transcript
         transcript = get_transcript(db, query)
         if transcript:
@@ -289,7 +288,7 @@ def get_variants_in_gene(db, gene_id):
     for variant in db.variants.find({'genes': gene_id}, fields={'_id': False}):
         variant['vep_annotations'] = [x for x in variant['vep_annotations'] if x['Gene'] == gene_id]
         add_consequence_to_variant(variant)
-        remove_extraneous_information(variant)
+        #remove_extraneous_information(variant)
         variants.append(variant)
     return variants
 
@@ -322,5 +321,37 @@ def get_exons_in_transcript(db, transcript_id):
     #      if x['feature_type'] != 'exon'],
     #     key=lambda k: k['start'])
     return sorted(list(db.exons.find({'transcript_id': transcript_id, 'feature_type': { "$in": ['CDS', 'UTR', 'exon'] }}, fields={'_id': False})), key=lambda k: k['start'])
+
+### VCF lookups
+
+# returns samples in which variant is seen
+def get_samples(variant_str):
+    chrom,pos,ref,alt,=str(variant_str.strip()).split('-')
+    tb=pysam.TabixFile('/slms/UGI/vm_exports/vyp/phenotips/mainset_January2015/mainset_January2015_chr%s.vcf.gz' % chrom,)
+    region=str('%s:%s-%s'%(chrom, pos, int(pos),))
+    headers=[h for h in tb.header]
+    headers=(headers[len(headers)-1]).strip().split('\t')
+    print(region)
+    records=tb.fetch(region=region)
+    geno=dict(zip(headers, [r.split('\t') for r in records][0]))
+    samples=[h for h in geno if geno[h].split(':')[0]=='0/1' or geno[h].split(':')[0]=='1/1']
+    return(samples)
+
+# return hpo terms found in people in which variant is found
+def get_hpo(variant_str):
+    samples=get_samples(variant_str)
+    #chrom,pos,ref,alt,=str(variant_str.strip()).split('-')
+    d=csv.DictReader(file('/data/uclex_data/UCLexInfo/uclex-samples.csv','r'),delimiter=',')
+    hpo=[]
+    for r in d:
+        if r['sample'] not in samples: continue
+        pheno=r['phenotype']
+        print((r['sample'],pheno,))
+        if pheno.startswith('HP'):
+            hpo+=[phizz.query_hpo([pheno])]
+        elif pheno.startswith('MIM'):
+            hpo+=[phizz.query_disease([pheno])]
+    return(hpo)
+
 
 

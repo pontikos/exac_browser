@@ -3,6 +3,7 @@
 from flask.ext.script import Manager
 from uclex import app
 import uclex
+#import mongodb
 
 manager = Manager(app)
 
