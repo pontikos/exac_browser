@@ -163,8 +163,8 @@ def dump_hpo_to_json(outFile, owner, password):
 
 def dump_to_mongodb(user, password):
     import pymongo
-    client = pymongo.MongoClient(host='localhost', port=27017)
-    db=client['exac']
+    client = pymongo.MongoClient(host='localhost', port=27016)
+    db=client['patients']
     db.patients.drop()
     db.patients.ensure_index('external_id')
     db.patients.ensure_index('report_id')
