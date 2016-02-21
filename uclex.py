@@ -1,6 +1,6 @@
 #!/usr/bin/env python2
 
-from phenotips import rest
+from phenotips_python_client import PhenotipsClient
 from mongodb import *
 # fizz: hpo lookup
 import phizz
@@ -41,13 +41,14 @@ from werkzeug.exceptions import default_exceptions, HTTPException
 import pandas
 import csv
 
+from urlparse import urlparse
+
 #import pdb
 
 logging.getLogger().addHandler(logging.StreamHandler())
 logging.getLogger().setLevel(logging.INFO)
 
 ADMINISTRATORS = ( 'n.pontikos@ucl.ac.uk',)
-
 app = Flask(__name__)
 mail_on_500(app, ADMINISTRATORS)
 Compress(app)
@@ -57,15 +58,17 @@ cache = SimpleCache(default_timeout=60*60*24)
 REGION_LIMIT = 1E5
 EXON_PADDING = 50
 # Load default config and override config from an environment variable
-app.config.from_pyfile('uclex.cfg')
-
-GENE_CACHE_DIR = os.path.join(os.path.dirname(__file__), 'gene_cache')
-GENES_TO_CACHE = {l.strip('\n') for l in open(os.path.join(os.path.dirname(__file__), 'genes_to_cache.txt'))}
+#app.config.from_pyfile('uclex.cfg')
+app.config.from_pyfile('uclex-old.cfg')
 
 
 def check_auth(username, password):
-    """This function is called to check if a username / password combination is valid.  """
-    response=rest.get_patient('%s:%s' % (username, password,))
+    """
+    This function is called to check if a username / password combination is valid.
+    Will try to connect to phenotips instance.
+    """
+    conn=PhenotipsClient()
+    response=conn.get_patient(auth='%s:%s' % (username, password,))
     if response:
         return True
     else:
@@ -83,23 +86,42 @@ def requires_auth(f):
         return f(*args, **kwargs)
     return decorated
 
-def get_db():
+def get_db(dbname=None):
     """
     Opens a new database connection if there is none yet for the
     current application context.
     """
-    if not hasattr(g, 'db_conn'): g.db_conn = connect_db()
-    return g.db_conn
+    if dbname is None: dbname=app.config['DB_NAME']
+    if not hasattr(g, 'db_conn'):
+        g.db_conn=dict()
+        g.db_conn[dbname] = connect_db(dbname)
+    elif dbname not in g.db_conn:
+        g.db_conn[dbname] = connect_db(dbname)
+    return g.db_conn[dbname]
 
 
-def connect_db():
+def get_hpo_graph():
+    """
+    Opens a new database connection if there is none yet for the
+    current application context.
+    """
+    if not hasattr(g, 'hpo_graph'):
+        from hpo_similarity.ontology import Ontology
+        from hpo_similarity.similarity import CalculateSimilarity
+        ontology=Ontology(app.config['HPO_OBO'])
+        g.hpo_graph=ontology.get_graph()
+    return g.hpo_graph
+
+
+def connect_db(dbname=None):
     """
     Connects to the specific database.
     """
     client = pymongo.MongoClient(host=app.config['DB_HOST'], port=app.config['DB_PORT'])
     print(client)
-    print(app.config['DB_NAME'])
-    return client[app.config['DB_NAME']]
+    if not dbname: dbname=app.config['DB_NAME']
+    print(dbname)
+    return client[dbname]
 
 
 def parse_tabix_file_subset(tabix_filenames, subset_i, subset_n, record_parser):
@@ -150,23 +172,20 @@ def create_cache():
         autocomplete_strings.append(gene['gene_name'])
         if 'other_names' in gene:
             autocomplete_strings.extend(gene['other_names'])
-    f = open(os.path.join(os.path.dirname(__file__), 'autocomplete_strings.txt'), 'w')
+    f = open(os.path.join(app.config['UCLEX_FILES_DIRECTORY'],'autocomplete_strings.txt'), 'w')
     for s in sorted(autocomplete_strings):
         f.write(s+'\n')
     f.close()
-
     # create static gene pages for genes in
-    if not os.path.exists(GENE_CACHE_DIR):
-        os.makedirs(GENE_CACHE_DIR)
-
+    if not os.path.exists(app.config['GENE_CACHE_DIR']): os.makedirs(app.config['GENE_CACHE_DIR'])
     # get list of genes ordered by num_variants
-    for gene_id in GENES_TO_CACHE:
+    for gene_id in app.config['GENES_TO_CACHE']:
         try:
             page_content = get_gene_page_content(gene_id)
         except Exception as e:
             print e
             continue
-        f = open(os.path.join(GENE_CACHE_DIR, '{}.html'.format(gene_id)), 'w')
+        f = open(os.path.join(app.config['GENE_CACHE_DIR'], '{}.html'.format(gene_id)), 'w')
         f.write(page_content)
         f.close()
 
@@ -247,16 +266,18 @@ def precalculate_metrics():
 def homepage():
     cache_key = 't-homepage'
     t = cache.get(cache_key)
+    db=get_db()
+    total_variants=db.variants.count()
+    total_patients=db.patients.count()
     if t is None:
-        t = render_template('homepage.html')
+        t = render_template('homepage.html',total_patients=total_patients,total_variants=total_variants)
         cache.set(cache_key, t)
     return t
 
 
 @app.route('/autocomplete/<query>')
 def awesome_autocomplete(query):
-    if not hasattr(g, 'autocomplete_strings'):
-        g.autocomplete_strings = [s.strip() for s in open(os.path.join(os.path.dirname(__file__), 'autocomplete_strings.txt'))]
+    if not hasattr(g, 'autocomplete_strings'): g.autocomplete_strings = [s.strip() for s in open(os.path.join(app.config['UCLEX_FILES_DIRECTORY'], 'autocomplete_strings.txt'))]
     suggestions = lookups.get_awesomebar_suggestions(g, query)
     return Response(json.dumps([{'value': s} for s in suggestions]),  mimetype='application/json')
 
@@ -264,36 +285,59 @@ def awesome_autocomplete(query):
 @app.route('/awesome')
 def awesome():
     db = get_db()
-    query = request.args.get('query')
+    query = str(request.args.get('query'))
     #for n in dir(request): print(n, getattr(request,n))
     #print(request.HTTP_REFERER)
+    print(request.referrer)
     if request.referrer:
         referrer=request.referrer
+        u = urlparse(referrer)
+        referrer='%s://%s' % (u.scheme,u.hostname,)
+        if u.port: referrer='%s:%s' % (referrer,u.port,)
     else:
         referrer=''
+    #u.netloc
+    print(referrer)
     datatype, identifier = lookups.get_awesomebar_result(db, query)
     print "Searched for %s: %s" % (datatype, identifier)
     if datatype == 'gene':
-        return redirect('{}gene/{}'.format(referrer,identifier))
+        return redirect('{}/gene/{}'.format(referrer,identifier))
     elif datatype == 'transcript':
-        return redirect('{}transcript/{}'.format(referrer,identifier))
+        return redirect('{}/transcript/{}'.format(referrer,identifier))
     elif datatype == 'variant':
-        return redirect('{}variant/{}'.format(referrer,identifier))
+        return redirect('{}/variant/{}'.format(referrer,identifier))
     elif datatype == 'region':
-        return redirect('{}region/{}'.format(referrer,identifier))
+        return redirect('{}/region/{}'.format(referrer,identifier))
     elif datatype == 'dbsnp_variant_set':
-        return redirect('{}dbsnp/{}'.format(referrer,identifier))
+        return redirect('{}/dbsnp/{}'.format(referrer,identifier))
+    elif datatype == 'hpo':
+        return redirect('{}/hpo/{}'.format(referrer,identifier))
+    elif datatype == 'mim':
+        return redirect('{}/mim/{}'.format(referrer,identifier))
     elif datatype == 'error':
-        return redirect('{}error/{}'.format(referrer,identifier))
+        return redirect('{}/error/{}'.format(referrer,identifier))
     elif datatype == 'not_found':
-        return redirect('{}not_found/{}'.format(referrer,identifier))
+        return redirect('{}/not_found/{}'.format(referrer,identifier))
     else:
         raise Exception
+
+
+@app.route('/variant3/<variant_str>')
+def variant_page3(variant_str):
+    db=get_db()
+    variant=db.variants.find_one({'VARIANT_ID':variant_str})
+    patients=[p for p in db.patients.find({'external_id':{'$in': variant['HET']+variant['HOM']}})]
+    hpo_terms=[p['features'] for p in patients]
+    print(hpo_terms)
+    print 'Rendering variant: %s' % variant_str
+    return render_template( 'test.html', variant=variant)
+
 
 
 @app.route('/variant/<variant_str>')
 def variant_page(variant_str):
     db = get_db()
+    variant_str=str(variant_str).strip().replace('_','-')
     try:
         chrom, pos, ref, alt = variant_str.split('-')
         pos = int(pos)
@@ -321,7 +365,6 @@ def variant_page(variant_str):
         base_coverage = lookups.get_coverage_for_bases(db, xpos, xpos + len(ref) - 1)
         any_covered = any([x['has_coverage'] for x in base_coverage])
         metrics = lookups.get_metrics(db, variant)
-
         # check the appropriate sqlite db to get the *expected* number of
         # available bams and *actual* number of available bams for this variant
         sqlite_db_path = os.path.join(
@@ -350,7 +393,6 @@ def variant_page(variant_str):
             read_viz_dict[het_or_hom]['readgroups'] = [ '%(chrom)s-%(pos)s-%(ref)s-%(alt)s_%(het_or_hom)s%(i)s' % locals() for i in range(read_viz_dict[het_or_hom]['n_available']) ]   #eg. '1-157768000-G-C_hom1', 
             read_viz_dict[het_or_hom]['urls'] = [ os.path.join('combined_bams', chrom, 'combined_chr%s_%03d.bam' % (chrom, pos % 1000)) for i in range(read_viz_dict[het_or_hom]['n_available']) ]
 
-
         print 'Rendering variant: %s' % variant_str
         return render_template(
             'variant.html',
@@ -369,8 +411,9 @@ def variant_page(variant_str):
 
 @app.route('/variant2/<variant_str>')
 def variant_page2(variant_str):
-    chrom,pos,ref,alt,=str(variant_str.strip()).split('-')
-    tb=pysam.TabixFile('/slms/UGI/vm_exports/vyp/phenotips/mainset_January2015/mainset_January2015_chr%s.vcf.gz' % chrom,)
+    variant_str=str(variant_str).strip().replace('_','-')
+    chrom, pos, ref, alt = variant_str.split('-')
+    tb=pysam.TabixFile('/slms/UGI/vm_exports/vyp/phenotips/uclex_files/current/mainset_January2015_chr%s.vcf.gz' % chrom,)
     region=str('%s:%s-%s'%(chrom, pos, int(pos),))
     headers=[h for h in tb.header]
     headers=(headers[len(headers)-1]).strip().split('\t')
@@ -378,7 +421,7 @@ def variant_page2(variant_str):
     records=tb.fetch(region=region)
     geno=dict(zip(headers, [r.split('\t') for r in records][0]))
     samples=[h for h in geno if geno[h].split(':')[0]=='0/1' or geno[h].split(':')[0]=='1/1']
-    d=csv.DictReader(file('/data/uclex_data/UCLexInfo/uclex-samples.csv','r'),delimiter=',')
+    d=csv.DictReader(file('/data/uclex_files/UCLexInfo/uclex-samples.csv','r'),delimiter=',')
     #d=csv.DictReader(file('/data/UCLpheno/uclex-hpo.txt','r'),delimiter='\t')
     for r in d:
         #if r['eid'] not in samples:
@@ -393,12 +436,44 @@ def variant_page2(variant_str):
     return('\n\n'.join(samples))
 
 
-@app.route('/gene/<gene_id>')
-def gene_page(gene_id):
-    if gene_id in GENES_TO_CACHE:
-        return open(os.path.join(GENE_CACHE_DIR, '{}.html'.format(gene_id))).read()
-    else:
-        return get_gene_page_content(gene_id)
+@app.route('/hpo/<hpo_id>')
+def hpo_page(hpo_id):
+    db=get_db('patients')
+    print(str(hpo_id))
+    patients=[p for p in db.patients.find( { 'features': {'$elemMatch':{'id':str(hpo_id)}} } )]
+    patient_ids=[p['external_id'] for p in patients]
+    hpo=phizz.query_hpo([hpo_id])[0]
+    #print(len([v['VARIANT_ID'] for v in db.variants.find({'HET' : { '$in': patient_ids }})]))
+    #print(len([v['VARIANT_ID'] for v in db.variants.find({'HOM' : { '$in': patient_ids }})]))
+    r=db.hpo.find_one({'hp_id':hpo_id})
+    if r: external_ids=r['external_ids']
+    else: external_ids=[]
+
+    #vcf_reader = pysam.VariantFile('/slms/UGI/vm_exports/vyp/phenotips/uclex_files/current/mainset_January2015_chr%s.vcf.gz' % '22')
+    #for record in vcf_reader:
+        #for s in external_ids:
+            #r=record.samples[s]
+            #if 'GT' in r: print(r['GT'])
+
+    return render_template('phenotype.html',hpo=hpo,external_ids=external_ids)
+
+@app.route('/mim/<mim_id>')
+def mim_page(mim_id):
+    db=get_db('patients')
+    print(str(mim_id))
+    patients=[p for p in db.patients.find( { 'features': {'$elemMatch':{'id':str(hpo_id)}} } )]
+    patient_ids=[p['external_id'] for p in patients]
+    print(phizz.query_disease([hpo_id]))
+    print(len([v['VARIANT_ID'] for v in db.variants.find({'HET' : { '$in': patient_ids }})]))
+    print(len([v['VARIANT_ID'] for v in db.variants.find({'HOM' : { '$in': patient_ids }})]))
+    return render_template('test.html')
+
+@app.route('/patient/<patient_id>')
+def patient_page(patient_id):
+    db=get_db()
+    patients=[p for p in db.patients.find({'external_id': str(patient_id)})]
+    print(patients)
+    return None
 
 def get_gene_page_content(gene_id):
     db = get_db()
@@ -451,18 +526,18 @@ def get_gene_page_content(gene_id):
         #print(phizz.query_gene(ensembl_id=str(gene_id)))
         return t
     except Exception, e:
-	print(dir(e))
-	print(e.args)
-	print(e.message)
-	print 'Failed on gene:', gene_id, ';Error=', e
+        print(dir(e))
+        print(e.args)
+        print(e.message)
+        print 'Failed on gene:', gene_id, ';Error=', e
         #abort(404)
 
-@app.route('/gene2/<gene_id>')
-def gene_page2(gene_id):
-    if gene_id in GENES_TO_CACHE:
-        return open(os.path.join(GENE_CACHE_DIR, '{}.html'.format(gene_id))).read()
+@app.route('/gene/<gene_id>')
+def gene_page(gene_id):
+    if gene_id in app.config['GENES_TO_CACHE']:
+        return open(os.path.join(app.config['GENE_CACHE_DIR'], '{}.html'.format(gene_id))).read()
     else:
-        return get_gene_page_content2(gene_id)
+        return get_gene_page_content(gene_id)
 
 
 def get_gene_page_content2(gene_id):
@@ -490,15 +565,15 @@ def get_gene_page_content2(gene_id):
                 #print(v.keys())
         return 'done'
     except Exception, e:
-	print(dir(e))
-	print(e.args)
-	print(e.message)
-	print 'Failed on gene:', gene_id, ';Error=', e
+        print(dir(e))
+        print(e.args)
+        print(e.message)
+        print 'Failed on gene:', gene_id, ';Error=', e
 
 
 
-@app.route('/transcript/<transcript_id>')
-def transcript_page(transcript_id):
+@app.route('/transcript2/<transcript_id>')
+def transcript_page2(transcript_id):
     db = get_db()
     try:
         transcript = lookups.get_transcript(db, transcript_id)
@@ -528,6 +603,25 @@ def transcript_page(transcript_id):
     except Exception, e:
         print 'Failed on transcript:', transcript_id, ';Error=', traceback.format_exc()
         abort(404)
+
+@app.route('/transcript/<transcript_id>')
+def transcript_page(transcript_id):
+    db = get_db()
+    try:
+        transcript = lookups.get_transcript(db, transcript_id)
+        cache_key = 't-transcript-{}'.format(transcript_id)
+        t = cache.get(cache_key)
+        print 'Rendering %stranscript: %s' % ('' if t is None else 'cached ', transcript_id)
+        if t: return t
+        variants=[v for v in db.variants.find({'Transcript':str(transcript_id)})]
+        genes=list(set([variants['Gene'] for v in variants]))
+        print(genes)
+        cache.set(cache_key, t)
+        return t
+    except Exception, e:
+        print 'Failed on transcript:', transcript_id, ';Error=', traceback.format_exc()
+        abort(404)
+
 
 
 @app.route('/region/<region_id>')
@@ -714,6 +808,254 @@ def apply_caching(response):
     # prevent click-jacking vulnerability identified by BITs
     response.headers["X-Frame-Options"] = "SAMEORIGIN"
     return response
+
+
+### all the mongodb reading/writing code
+
+
+def load_db():
+    """
+    Load the database
+    """
+    # Initialize database
+    # Don't need to explicitly create tables with mongo, just indices
+    confirm = raw_input('This will drop the database and reload. Are you sure you want to continue? [no] ')
+    if not confirm.startswith('y'):
+        print('Exiting...')
+        sys.exit(1)
+    all_procs = []
+    for load_function in [load_variants_file, load_dbsnp_file, load_base_coverage, load_gene_models, load_constraint_information]:
+        procs = load_function()
+        all_procs.extend(procs)
+        print("Started %s processes to run %s" % (len(procs), load_function.__name__))
+    [p.join() for p in all_procs]
+    print('Done! Loading MNPs...')
+    load_mnps()
+    print('Done! Creating cache...')
+    create_cache()
+    print('Done!')
+
+
+def load_base_coverage():
+    """ """
+    def load_coverage(coverage_files, i, n, db):
+        coverage_generator = parse_tabix_file_subset(coverage_files, i, n, get_base_coverage_from_file)
+        try:
+            db.base_coverage.insert(coverage_generator, w=0)
+        except pymongo.errors.InvalidOperation, e:
+            print(e)
+            # handle error when coverage_generator is empty
+            pass  
+    db = get_db()
+    db.base_coverage.drop()
+    print("Dropped db.base_coverage")
+    # load coverage first; variant info will depend on coverage
+    db.base_coverage.ensure_index('xpos')
+    procs = []
+    coverage_files = app.config['BASE_COVERAGE_FILES']
+    num_procs = app.config['LOAD_DB_PARALLEL_PROCESSES']
+    random.shuffle(app.config['BASE_COVERAGE_FILES'])
+    for i in range(num_procs):
+        p = Process(target=load_coverage, args=(coverage_files, i, num_procs, db))
+        p.start()
+        procs.append(p)
+    return procs
+    #print 'Done loading coverage. Took %s seconds' % int(time.time() - start_time)
+
+
+def load_variants_file():
+    def load_variants(sites_file, i, n, db):
+        for f in sites_file:
+            print(f)
+            variants_generator = parse_tabix_file_subset([f], i, n, get_variants_from_sites_vcf)
+            try:
+                db.variants.insert(variants_generator, w=0)
+            except pymongo.errors.InvalidOperation:
+                pass  # handle error when variant_generator is empty
+    db = get_db()
+    db.variants.drop()
+    print("Dropped db.variants")
+    # grab variants from sites VCF
+    db.variants.ensure_index('xpos')
+    db.variants.ensure_index('xstart')
+    db.variants.ensure_index('xstop')
+    db.variants.ensure_index('rsid')
+    db.variants.ensure_index('genes')
+    db.variants.ensure_index('transcripts')
+    sites_vcfs = app.config['SITES_VCFS']
+    print(sites_vcfs)
+    #if len(sites_vcfs) > 1: raise Exception("More than one sites vcf file found: %s" % sites_vcfs)
+    procs = []
+    num_procs = app.config['LOAD_DB_PARALLEL_PROCESSES']
+    #pdb.set_trace()
+    for i in range(num_procs):
+        p = Process(target=load_variants, args=(sites_vcfs, i, num_procs, db))
+        p.start()
+        procs.append(p)
+    return procs
+
+    #print 'Done loading variants. Took %s seconds' % int(time.time() - start_time)
+
+
+def load_constraint_information():
+    db = get_db()
+    db.constraint.drop()
+    print 'Dropped db.constraint.'
+    start_time = time.time()
+    with gzip.open(app.config['CONSTRAINT_FILE']) as constraint_file:
+        for transcript in get_constraint_information(constraint_file):
+            db.constraint.insert(transcript, w=0)
+    db.constraint.ensure_index('transcript')
+    print 'Done loading constraint info. Took %s seconds' % int(time.time() - start_time)
+
+
+def load_mnps():
+    db = get_db()
+    start_time = time.time()
+    db.variants.ensure_index('has_mnp')
+    print 'Done indexing.'
+    while db.variants.find_and_modify({'has_mnp' : True}, {'$unset': {'has_mnp': '', 'mnps': ''}}): pass
+    print 'Deleted MNP data.'
+    with gzip.open(app.config['MNP_FILE']) as mnp_file:
+        for mnp in get_mnp_data(mnp_file):
+            variant = lookups.get_raw_variant(db, mnp['xpos'], mnp['ref'], mnp['alt'], True)
+            db.variants.find_and_modify({'_id': variant['_id']}, {'$set': {'has_mnp': True}, '$push': {'mnps': mnp}}, w=0)
+    db.variants.ensure_index('has_mnp')
+    print 'Done loading MNP info. Took %s seconds' % int(time.time() - start_time)
+
+
+def load_gene_models():
+    db = get_db()
+    db.genes.drop()
+    db.transcripts.drop()
+    db.exons.drop()
+    print 'Dropped db.genes, db.transcripts, and db.exons.'
+    start_time = time.time()
+    canonical_transcripts = {}
+    with gzip.open(app.config['CANONICAL_TRANSCRIPT_FILE']) as canonical_transcript_file:
+        for gene, transcript in get_canonical_transcripts(canonical_transcript_file):
+            canonical_transcripts[gene] = transcript
+    omim_annotations = {}
+    with gzip.open(app.config['OMIM_FILE']) as omim_file:
+        for fields in get_omim_associations(omim_file):
+            if fields is None:
+                continue
+            gene, transcript, accession, description = fields
+            omim_annotations[gene] = (accession, description)
+    dbnsfp_info = {}
+    with gzip.open(app.config['DBNSFP_FILE']) as dbnsfp_file:
+        for dbnsfp_gene in get_dbnsfp_info(dbnsfp_file):
+            other_names = [other_name.upper() for other_name in dbnsfp_gene['gene_other_names']]
+            dbnsfp_info[dbnsfp_gene['ensembl_gene']] = (dbnsfp_gene['gene_full_name'], other_names)
+    print 'Done loading metadata. Took %s seconds' % int(time.time() - start_time)
+    # grab genes from GTF
+    start_time = time.time()
+    with gzip.open(app.config['GENCODE_GTF']) as gtf_file:
+        for gene in get_genes_from_gencode_gtf(gtf_file):
+            gene_id = gene['gene_id']
+            if gene_id in canonical_transcripts:
+                gene['canonical_transcript'] = canonical_transcripts[gene_id]
+            if gene_id in omim_annotations:
+                gene['omim_accession'] = omim_annotations[gene_id][0]
+                gene['omim_description'] = omim_annotations[gene_id][1]
+            if gene_id in dbnsfp_info:
+                gene['full_gene_name'] = dbnsfp_info[gene_id][0]
+                gene['other_names'] = dbnsfp_info[gene_id][1]
+            db.genes.insert(gene, w=0)
+    print 'Done loading genes. Took %s seconds' % int(time.time() - start_time)
+    start_time = time.time()
+    db.genes.ensure_index('gene_id')
+    db.genes.ensure_index('gene_name_upper')
+    db.genes.ensure_index('gene_name')
+    db.genes.ensure_index('other_names')
+    db.genes.ensure_index('xstart')
+    db.genes.ensure_index('xstop')
+    print 'Done indexing gene table. Took %s seconds' % int(time.time() - start_time)
+    # and now transcripts
+    start_time = time.time()
+    with gzip.open(app.config['GENCODE_GTF']) as gtf_file:
+        db.transcripts.insert((transcript for transcript in get_transcripts_from_gencode_gtf(gtf_file)), w=0)
+    print 'Done loading transcripts. Took %s seconds' % int(time.time() - start_time)
+    start_time = time.time()
+    db.transcripts.ensure_index('transcript_id')
+    db.transcripts.ensure_index('gene_id')
+    print 'Done indexing transcript table. Took %s seconds' % int(time.time() - start_time)
+    # Building up gene definitions
+    start_time = time.time()
+    with gzip.open(app.config['GENCODE_GTF']) as gtf_file:
+        db.exons.insert((exon for exon in get_exons_from_gencode_gtf(gtf_file)), w=0)
+    print 'Done loading exons. Took %s seconds' % int(time.time() - start_time)
+    start_time = time.time()
+    db.exons.ensure_index('exon_id')
+    db.exons.ensure_index('transcript_id')
+    db.exons.ensure_index('gene_id')
+    print 'Done indexing exon table. Took %s seconds' % int(time.time() - start_time)
+    return []
+
+
+def load_dbsnp_file():
+    db = get_db()
+    def load_dbsnp(dbsnp_file, i, n, db):
+        if os.path.isfile(dbsnp_file + ".tbi"):
+            dbsnp_record_generator = parse_tabix_file_subset([dbsnp_file], i, n, get_snp_from_dbsnp_file)
+            try:
+                db.dbsnp.insert(dbsnp_record_generator, w=0)
+            except pymongo.errors.InvalidOperation:
+                pass  # handle error when coverage_generator is empty
+        else:
+            with gzip.open(dbsnp_file) as f:
+                db.dbsnp.insert((snp for snp in get_snp_from_dbsnp_file(f)), w=0)
+    db.dbsnp.drop()
+    db.dbsnp.ensure_index('rsid')
+    db.dbsnp.ensure_index('xpos')
+    start_time = time.time()
+    dbsnp_file = app.config['DBSNP_FILE']
+    print "Loading dbsnp from %s" % dbsnp_file
+    if os.path.isfile(dbsnp_file + ".tbi"): num_procs = app.config['LOAD_DB_PARALLEL_PROCESSES']
+    else:
+        # see if non-tabixed .gz version exists
+        if os.path.isfile(dbsnp_file):
+            print(("WARNING: %(dbsnp_file)s.tbi index file not found. Will use single thread to load dbsnp."
+                "To create a tabix-indexed dbsnp file based on UCSC dbsnp, do: \n"
+                "   wget http://hgdownload.soe.ucsc.edu/goldenPath/hg19/database/snp141.txt.gz \n"
+                "   gzcat snp141.txt.gz | cut -f 1-5 | bgzip -c > snp141.txt.bgz \n"
+                "   tabix -0 -s 2 -b 3 -e 4 snp141.txt.bgz") % locals())
+            num_procs = 1
+        else:
+            raise Exception("dbsnp file %s(dbsnp_file)s not found." % locals())
+    procs = []
+    for i in range(num_procs):
+        p = Process(target=load_dbsnp, args=(dbsnp_file, i, num_procs, db))
+        p.start()
+        procs.append(p)
+    return procs
+    #print 'Done loading dbSNP. Took %s seconds' % int(time.time() - start_time)
+    #start_time = time.time()
+    #db.dbsnp.ensure_index('rsid')
+    #print 'Done indexing dbSNP table. Took %s seconds' % int(time.time() - start_time)
+
+
+def mrc_hpo():
+    hpo_graph=get_hpo_graph()
+    db=get_db()
+    for var in db.variants.find():
+        hpo_anc=[]
+        for eid in list(set(var['HET']+var['HOM'])):
+            patient=db.patients.find_one({'external_id':eid})
+            if not patient: continue
+            if 'features' not in patient: continue
+            for f in patient['features']:
+                fid=f['id']
+                if not fid.startswith('HP'): continue
+                hpo_anc.append(set(hpo_graph.get_ancestors(fid)))
+        if not hpo_anc: continue
+        if 'SYMBOL' not in var: continue
+        var['ALL_HPO']=list(set(set.union(*hpo_anc)))
+        var['SHARED_HPO']=list(set.intersection(*hpo_anc))
+        print(var['VARIANT_ID'],var['SYMBOL'],len(var['HET']+var['HOM']),var['SHARED_HPO'],var['ALL_HPO'])
+        db.variants.update({'VARIANT_ID':var['VARIANT_ID']},var,upsert=True)
+
+
 
 if __name__ == "__main__":
     # use ssl
