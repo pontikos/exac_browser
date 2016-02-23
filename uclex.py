@@ -43,6 +43,8 @@ import csv
 
 from urlparse import urlparse
 
+import pickle
+
 #import pdb
 
 logging.getLogger().addHandler(logging.StreamHandler())
@@ -61,6 +63,7 @@ EXON_PADDING = 50
 #app.config.from_pyfile('uclex.cfg')
 app.config.from_pyfile('uclex-old.cfg')
 
+HPO_TO_GENE=pickle.load(file('/slms/UGI/vm_exports/vyp/phenotips/uclex_files/ALL_SOURCES_ALL_FREQUENCIES_phenotype_to_genes.data','rb'))
 
 def check_auth(username, password):
     """
@@ -268,7 +271,8 @@ def homepage():
     t = cache.get(cache_key)
     db=get_db()
     total_variants=db.variants.count()
-    total_patients=db.patients.count()
+    patients_db=get_db('patients')
+    total_patients=patients_db.patients.count()
     if t is None:
         t = render_template('homepage.html',total_patients=total_patients,total_variants=total_variants)
         cache.set(cache_key, t)
@@ -438,24 +442,29 @@ def variant_page2(variant_str):
 
 @app.route('/hpo/<hpo_id>')
 def hpo_page(hpo_id):
-    db=get_db('patients')
+    patients_db=get_db('patients')
+    db=get_db()
     print(str(hpo_id))
-    patients=[p for p in db.patients.find( { 'features': {'$elemMatch':{'id':str(hpo_id)}} } )]
+    patients=[p for p in patients_db.patients.find( { 'features': {'$elemMatch':{'id':str(hpo_id)}} } )]
     patient_ids=[p['external_id'] for p in patients]
     hpo=phizz.query_hpo([hpo_id])[0]
     #print(len([v['VARIANT_ID'] for v in db.variants.find({'HET' : { '$in': patient_ids }})]))
     #print(len([v['VARIANT_ID'] for v in db.variants.find({'HOM' : { '$in': patient_ids }})]))
-    r=db.hpo.find_one({'hp_id':hpo_id})
+    r=patients_db.hpo.find_one({'hp_id':hpo_id})
     if r: external_ids=r['external_ids']
     else: external_ids=[]
-
+    genes=[lookups.get_gene_by_name(db, gene_name) for gene_name in HPO_TO_GENE[hpo_id]]
+    #[variant for variant in lookups.get_variants_in_gene(db, g['gene_id'])]
+       #if variant['major_consequence']!='stop_gained': continue
+       #print(variant)
+       #break
+    #print( lookups.get_variants_in_gene(db, 'CNNM4') )
     #vcf_reader = pysam.VariantFile('/slms/UGI/vm_exports/vyp/phenotips/uclex_files/current/mainset_January2015_chr%s.vcf.gz' % '22')
     #for record in vcf_reader:
         #for s in external_ids:
             #r=record.samples[s]
             #if 'GT' in r: print(r['GT'])
-
-    return render_template('phenotype.html',hpo=hpo,external_ids=external_ids)
+    return render_template('phenotype.html',hpo=hpo,external_ids=external_ids,genes=genes)
 
 @app.route('/mim/<mim_id>')
 def mim_page(mim_id):
