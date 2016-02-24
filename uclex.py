@@ -1,5 +1,6 @@
 #!/usr/bin/env python2
 
+from Bio import Entrez
 from phenotips_python_client import PhenotipsClient
 from mongodb import *
 # fizz: hpo lookup
@@ -47,6 +48,10 @@ import pickle
 
 #import pdb
 
+from flask import Flask, session
+from flask.ext.session import Session
+
+
 logging.getLogger().addHandler(logging.StreamHandler())
 logging.getLogger().setLevel(logging.INFO)
 
@@ -57,13 +62,34 @@ Compress(app)
 app.config['COMPRESS_DEBUG'] = True
 cache = SimpleCache(default_timeout=60*60*24)
 
+
 REGION_LIMIT = 1E5
 EXON_PADDING = 50
 # Load default config and override config from an environment variable
 #app.config.from_pyfile('uclex.cfg')
 app.config.from_pyfile('uclex-old.cfg')
 
-HPO_TO_GENE=pickle.load(file('/slms/UGI/vm_exports/vyp/phenotips/uclex_files/ALL_SOURCES_ALL_FREQUENCIES_phenotype_to_genes.data','rb'))
+# Check Configuration section for more details
+#SESSION_TYPE = 'null'
+SESSION_TYPE = 'mongodb'
+#SESSION_USE_SIGNER=True
+app.config.from_object(__name__)
+sess=Session()
+sess.init_app(app)
+
+
+
+#HPO_TO_GENE=pickle.load(file('/slms/UGI/vm_exports/vyp/phenotips/uclex_files/ALL_SOURCES_ALL_FREQUENCIES_phenotype_to_genes.data','rb'))
+
+@app.route('/set/<query>')
+def set(query):
+    value = query
+    session['key'] = value
+    return value
+
+@app.route('/get/')
+def get():
+    return session.get('key', 'not set')
 
 def check_auth(username, password):
     """
@@ -73,6 +99,8 @@ def check_auth(username, password):
     conn=PhenotipsClient()
     response=conn.get_patient(auth='%s:%s' % (username, password,))
     if response:
+        # setting a session key for pubmedBatch to save result
+        session['user'] = username
         return True
     else:
         return False
@@ -277,6 +305,48 @@ def homepage():
         t = render_template('homepage.html',total_patients=total_patients,total_variants=total_variants)
         cache.set(cache_key, t)
     return t
+
+@app.route('/pubmedbatch/', methods=['GET'])
+@requires_auth
+def pubmedbatch_get():
+    # this is the main page of pubmedBatch
+    tablename = 'pubmedBatch'
+    user = session.get('user')
+    db=get_db('pubmedbatch')
+    res=db.results.find_one({'user_id':user})
+    print(res)
+    if not res:
+        print('inserted')
+        db.results.insert({'user_id':user,'folder':['a','b']})
+    res=db.results.find_one({'user_id':user})
+    return render_template( 'tools_main.tt', folders = (res['folder']) )
+
+
+@app.route('/batch_pubmed/')
+@requires_auth
+def batch_pubmed():
+    Entrez.email = "Your.Name.Here@example.org"
+    handle = Entrez.einfo()
+    record = Entrez.read(handle)
+    handle.close()
+    search_results = Entrez.read(Entrez.esearch(db='pubmed', term='Retinal dystrophy', reldate=365, datetype='pdat', usehistory='y'))
+    count = int(search_results['Count'])
+    print('Found %i results' % count)
+    handle = Entrez.efetch("pubmed",restart=0,retmax=1,retmode="xml", webenv=search_results['WebEnv'], query_key=search_results['QueryKey'])
+    records = Entrez.parse(handle)
+    import pprint
+    pp = pprint.PrettyPrinter(indent=10)
+    #return( '\n'.join([record['MedlineCitation']['Article']['ArticleTitle'] for record in records]) )
+    records=[ r for r in records]
+    for r in records:
+        x=r['MedlineCitation']['Article']['Abstract']['AbstractText']
+        #print('\n'.join(map(lambda x: str(x), x)))
+        for i in x:
+            print('%s:%s' % (i.attributes['Label'], str(i)))
+    #abstract = '\n'.join(abstract)
+    return render_template( 'pubmedbatch.html', records=records)#, abstract=abstract )
+
+
 
 
 @app.route('/autocomplete/<query>')
@@ -1070,7 +1140,6 @@ if __name__ == "__main__":
     # use ssl
     #from OpenSSL import SSL
     # altnerative
-    import ssl
     #context = SSL.Context(SSL.SSLv23_METHOD)
     #context = ssl.SSLContext(ssl.PROTOCOL_SSLv23)
     #context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
@@ -1080,8 +1149,6 @@ if __name__ == "__main__":
     #context.use_privatekey_file('/home/rmhanpo/phenotips.key')
     #context.use_certificate_file('/home/rmhanpo/phenotips.crt')
     # this is now handled by Apache
-    context=( '/home/rmhanpo/keys/host.crt', '/home/rmhanpo/keys/host.key')
-    context=( '/home/rmhanpo/keys/phenotips.crt', '/home/rmhanpo/keys/phenotips.key')
     app.run(host='0.0.0.0',port=8000)
     #app.run(host='127.0.0.1',port=8000, debug = True, ssl_context=context)
     #app.run(host='0.0.0.0', port=8000, ssl_context=context)
