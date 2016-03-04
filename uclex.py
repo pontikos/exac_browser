@@ -41,6 +41,7 @@ from werkzeug.exceptions import default_exceptions, HTTPException
 
 import pandas
 import csv
+import StringIO
 
 from urlparse import urlparse
 
@@ -78,9 +79,6 @@ sess=Session()
 sess.init_app(app)
 
 
-
-#HPO_TO_GENE=pickle.load(file('/slms/UGI/vm_exports/vyp/phenotips/uclex_files/ALL_SOURCES_ALL_FREQUENCIES_phenotype_to_genes.data','rb'))
-
 @app.route('/set/<query>')
 def set(query):
     value = query
@@ -101,6 +99,7 @@ def check_auth(username, password):
     if response:
         # setting a session key for pubmedBatch to save result
         session['user'] = username
+        session['password'] = password
         return True
     else:
         return False
@@ -283,8 +282,6 @@ def precalculate_metrics():
     db.metrics.ensure_index('metric')
     print 'Done pre-calculating metrics!'
 
-
-
 # @app.teardown_appcontext
 # def close_db(error):
 #     """Closes the database again at the end of the request."""
@@ -305,48 +302,6 @@ def homepage():
         t = render_template('homepage.html',total_patients=total_patients,total_variants=total_variants)
         cache.set(cache_key, t)
     return t
-
-@app.route('/pubmedbatch/', methods=['GET'])
-@requires_auth
-def pubmedbatch_get():
-    # this is the main page of pubmedBatch
-    tablename = 'pubmedBatch'
-    user = session.get('user')
-    db=get_db('pubmedbatch')
-    res=db.results.find_one({'user_id':user})
-    print(res)
-    if not res:
-        print('inserted')
-        db.results.insert({'user_id':user,'folder':['a','b']})
-    res=db.results.find_one({'user_id':user})
-    return render_template( 'tools_main.tt', folders = (res['folder']) )
-
-
-@app.route('/batch_pubmed/')
-@requires_auth
-def batch_pubmed():
-    Entrez.email = "Your.Name.Here@example.org"
-    handle = Entrez.einfo()
-    record = Entrez.read(handle)
-    handle.close()
-    search_results = Entrez.read(Entrez.esearch(db='pubmed', term='Retinal dystrophy', reldate=365, datetype='pdat', usehistory='y'))
-    count = int(search_results['Count'])
-    print('Found %i results' % count)
-    handle = Entrez.efetch("pubmed",restart=0,retmax=1,retmode="xml", webenv=search_results['WebEnv'], query_key=search_results['QueryKey'])
-    records = Entrez.parse(handle)
-    import pprint
-    pp = pprint.PrettyPrinter(indent=10)
-    #return( '\n'.join([record['MedlineCitation']['Article']['ArticleTitle'] for record in records]) )
-    records=[ r for r in records]
-    for r in records:
-        x=r['MedlineCitation']['Article']['Abstract']['AbstractText']
-        #print('\n'.join(map(lambda x: str(x), x)))
-        for i in x:
-            print('%s:%s' % (i.attributes['Label'], str(i)))
-    #abstract = '\n'.join(abstract)
-    return render_template( 'pubmedbatch.html', records=records)#, abstract=abstract )
-
-
 
 
 @app.route('/autocomplete/<query>')
@@ -395,6 +350,10 @@ def awesome():
     else:
         raise Exception
 
+
+@app.route('/patient/<patient_str>')
+def get_patient(patient_str):
+    pass
 
 @app.route('/variant3/<variant_str>')
 def variant_page3(variant_str):
@@ -514,6 +473,7 @@ def variant_page2(variant_str):
 def hpo_page(hpo_id):
     patients_db=get_db('patients')
     db=get_db()
+    hpo_db=get_db('hpo')
     print(str(hpo_id))
     patients=[p for p in patients_db.patients.find( { 'features': {'$elemMatch':{'id':str(hpo_id)}} } )]
     patient_ids=[p['external_id'] for p in patients]
@@ -523,7 +483,10 @@ def hpo_page(hpo_id):
     r=patients_db.hpo.find_one({'hp_id':hpo_id})
     if r: external_ids=r['external_ids']
     else: external_ids=[]
-    genes=[lookups.get_gene_by_name(db, gene_name) for gene_name in HPO_TO_GENE[hpo_id]]
+    genes=[lookups.get_gene_by_name(db, r['Gene-Name']) for r in hpo_db.hpo_gene.find({'HPO-ID':hpo_id})]
+    #for r in hpo_db.hpo_pubmed.find({'hpoid':hpo_id}): print(r)
+    #pmids=[r['pmid'] for r in hpo_db.hpo_pubmed.find({'hpoid':hpo_id})]
+    pmids=[]
     #[variant for variant in lookups.get_variants_in_gene(db, g['gene_id'])]
        #if variant['major_consequence']!='stop_gained': continue
        #print(variant)
@@ -534,7 +497,7 @@ def hpo_page(hpo_id):
         #for s in external_ids:
             #r=record.samples[s]
             #if 'GT' in r: print(r['GT'])
-    return render_template('phenotype.html',hpo=hpo,external_ids=external_ids,genes=genes)
+    return render_template('phenotype.html',hpo=hpo,external_ids=external_ids,genes=genes,pmids=pmids)
 
 @app.route('/mim/<mim_id>')
 def mim_page(mim_id):
@@ -579,15 +542,18 @@ def get_gene_page_content(gene_id):
             # if none of the variants are on the canonical transcript use the transcript with the most variants on it
             transcript = lookups.get_transcript(db, transcript_id)
             variants_in_transcript = lookups.get_variants_in_transcript(db, transcript_id)
-            print('variants_in_transcript',len(variants_in_transcript))
+            #print('variants_in_transcript',len(variants_in_transcript))
             coverage_stats = lookups.get_coverage_for_transcript(db, transcript['xstart'] - EXON_PADDING, transcript['xstop'] + EXON_PADDING)
-            print('coverage_stats',len(coverage_stats))
+            #print('coverage_stats',len(coverage_stats))
             add_transcript_coordinate_to_variants(db, variants_in_transcript, transcript_id)
             constraint_info = lookups.get_constraint_for_transcript(db, transcript_id)
-            print('constraint_info',constraint_info)
+            #print('constraint_info',constraint_info)
             #print(gene)
             #print(transcript)
-            print(variants_in_gene)
+            #print(variants_in_gene)
+            print '============'
+            print coverage_stats
+            print '============'
             t=render_template(
                 'gene.html',
                 gene=gene,
@@ -1114,6 +1080,9 @@ def load_dbsnp_file():
     #print 'Done indexing dbSNP table. Took %s seconds' % int(time.time() - start_time)
 
 
+"""
+Get the most recent common ancestor between two sets of hpo terms.
+"""
 def mrc_hpo():
     hpo_graph=get_hpo_graph()
     db=get_db()
@@ -1135,9 +1104,168 @@ def mrc_hpo():
         db.variants.update({'VARIANT_ID':var['VARIANT_ID']},var,upsert=True)
 
 
+@app.route('/pubmedbatch/', methods=['GET', 'POST'])
+@requires_auth
+def pubmedbatch_main():
+    # this is the main page of pubmedBatch
+    # It allows a user to create a "folder" to hold results in the mangodb. Post request will handle the 'folder' creation
+    user = session.get('user')
+    db = get_db('pubmedbatch')
+    user_db = db.results.find_one({'user_id':user})
+    
+    if request.method == 'POST':
+        # time to create a folder
+        # first check if the folder already exists. Yes? pass. No? create
+        folder = request.form['create-folder']
+        user_folder =  [d['folder_name'] for d in user_db['folder'] if 'folder_name' in d]
+        if folder not in user_folder:
+            db.results.update({'user_id': user}, {'$push': {'folder': {'folder_name': folder, 'files': []}}})
+    else:
+        # get folders. If user not exists in pubmed db, create it
+        #print(res)
+        if not user_db:
+            # A new user dropping by...
+            print('A "user" is being made in pubmedDB!')
+            db.results.insert({'user_id':user,'folder':[]})
+        
+    # let's render the template  
+    user_db = db.results.find_one({'user_id':user})
+    #print user_db
+    return render_template( 'pubmedbatch_main.html', 
+            user = user,
+            folders = [d['folder_name'] for d in user_db['folder'] if 'folder_name' in d])
+
+
+@app.route('/pubmedbatch/<folder>', methods=['GET', 'POST'])
+@requires_auth
+def pubmedbatch(folder):
+    # This is the main business
+    user = session.get('user')
+    db = get_db('pubmedbatch')
+    
+    if request.method == 'POST':
+        # post. get form data, return JSON
+        ##########################################################
+        # get form data
+        #########################################################
+        column = int(request.form['column'])
+        Entrez.email = request.form['email']
+        AND_term = request.form['AND']
+        OR_term = request.form['OR']
+        verbose = request.form.get('verbose','')
+        csv_file = request.files['csv_upload']
+        known_genes = request.files['known_genes'] or ''
+        mask_genes = request.files['mask_genes'] or ''
+        #########################################################
+        # parse known genes and mask genes
+        known_genes = known_genes.read().split() if known_genes else ''
+        mask_genes = mask_genes.read().split() if mask_genes else ''
+        #########################################################
+        # read csv. has to make the csv string looking like a filehandle
+        csv_content = csv_file.read()        
+        csvreader = csv.reader(StringIO.StringIO(csv_content), delimiter=',', quotechar='"')
+        
+        # number of lines?
+        line_num = len(re.findall('\n', csv_content))
+        # format terms
+        OR = OR_term.split()
+        OR.sort()
+        AND = AND_term.split()
+        AND.sort()
+        smashed_OR = ['"' + t + '"' + '[ALL FIELDS]' for t in OR]
+        smashed_AND = ['"' + t + '"' + '[Title/Abstract]' for t in AND]
+        smashed_OR = ' OR '.join(smashed_OR)
+        smashed_AND = ' AND '.join(smashed_AND)
+        smashed_term = ' AND (' + smashed_OR + ')'
+        if smashed_AND:
+            smashed_term += ' AND ' + smashed_AND
+        
+        ###########################################################
+        # it's time to read the csv file
+        ###########################################################
+        row_num = -1
+        for row in csvreader:
+            row_num += 1
+            # read header
+            if not row_num:
+                header = row
+                # add 2 columns after HUGO
+                header[column+1:column+1] = ['ref(pubmedID)', 'pubmed_score']
+                # add a pred score at the beginning
+                header[0:0] = ['pred_score']
+                continue
+            # read in real data
+            gene_name = row[column]
+            if gene_name == 'NA':
+                continue
+            # get rid of any parentheses and their content
+            print gene_name
+            gene_name = re.sub(r'\([^)]*\)?','',gene_name)
+            print gene_name
+
+            ####################################################
+            # first to see if it is searched
+            # if yes, copy result
+            # elsif masked, pass
+            # else
+            #   db.cache
+            #       when in db.cache and up-to-date, get the pubmed result
+            #       when in db.cache and out-of-date, add new pubmed result
+            #       when not in db.cache, search pubmed and store
+            ####################################################
+
+            return 'ok'
+            break
+        handle = Entrez.einfo()
+        record = Entrez.read(handle)
+        handle.close()
+        search_results = Entrez.read(Entrez.esearch(db='pubmed', term='Retinal dystrophy', reldate=365, datetype='pdat', usehistory='y'))
+        count = int(search_results['Count'])
+        print('Found %i results' % count)
+        handle = Entrez.efetch("pubmed",restart=0,retmax=1,retmode="xml", webenv=search_results['WebEnv'], query_key=search_results['QueryKey'])
+        records = Entrez.parse(handle)
+        import pprint
+        pp = pprint.PrettyPrinter(indent=10)
+        #return( '\n'.join([record['MedlineCitation']['Article']['ArticleTitle'] for record in records]) )
+        records=[ r for r in records]
+        for r in records:
+            x=r['MedlineCitation']['Article']['Abstract']['AbstractText']
+            #print('\n'.join(map(lambda x: str(x), x)))
+            for i in x:
+                print('%s:%s' % (i.attributes['Label'], str(i)))
+        #abstract = '\n'.join(abstract)
+    else:
+        # get. display page
+        # First see if folder exists. if not, return error
+        user_folders = db.results.find_one({'user_id': user})['folder']
+        folders = [d['folder_name'] for d in user_folders if 'folder_name' in d]
+        # get AND an OR field
+        AND = app.config['PUBMEDBATCH_AND']
+        OR = app.config['PUBMEDBATCH_OR']
+
+        #user_folders = user_folders['folder']
+        if folder not in folders:
+            return "Error: " + folder + " does not exist!" 
+        # get the files in the folder to display
+        for d in user_folders:
+            if d['folder_name'] == folder:
+                files = [e['file_name'] for e in d['files'] if 'file_name' in e]
+        return render_template( 'pubmedbatch.html',
+                home_pubmedbatch = home_pubmedbatch,
+                files = files,
+                user = user, 
+                folder = folder,
+                AND = AND,
+                OR = OR)
+
+
+
 
 if __name__ == "__main__":
     # use ssl
+    # add some common url. Would be good if can generate the url in real time
+    home = ''
+    home_pubmedbatch = '/pubmedbatch'
     #from OpenSSL import SSL
     # altnerative
     #context = SSL.Context(SSL.SSLv23_METHOD)
@@ -1149,7 +1277,9 @@ if __name__ == "__main__":
     #context.use_privatekey_file('/home/rmhanpo/phenotips.key')
     #context.use_certificate_file('/home/rmhanpo/phenotips.crt')
     # this is now handled by Apache
-    app.run(host='0.0.0.0',port=8000)
+    app.run(host='0.0.0.0',port=8000,threaded=True)
+    # threaded
+    #app.run(threaded=True)
     #app.run(host='127.0.0.1',port=8000, debug = True, ssl_context=context)
     #app.run(host='0.0.0.0', port=8000, ssl_context=context)
     #app.run(host='0.0.0.0', port=8000, debug=True, ssl_context='adhoc')

@@ -101,12 +101,18 @@ def get_coverage_for_bases(db, xstart, xstop=None):
     for item in ret:
         item['has_coverage'] = 'mean' in item
         del item['xpos']
+    print '+++++++++++++++++++++++++++'
+    temp = db.base_coverage.find({'xpos': {'$gte': xstart, '$lte': xstop}})
+    from bson.json_util import dumps
+    dumps(temp)
+    print xstart
+    print xstop
+    print '+++++++++++++++++++++++++++++'
     return ret
 
 
 def get_coverage_for_transcript(db, xstart, xstop=None):
     """
-
     :param db:
     :param genomic_coord_to_exon:
     :param xstart:
@@ -116,9 +122,11 @@ def get_coverage_for_transcript(db, xstart, xstop=None):
     coverage_array = get_coverage_for_bases(db, xstart, xstop)
     # only return coverages that have coverage (if that makes any sense?)
     # return coverage_array
+    #print '+++++++++++++++++++++++++'
+    #print coverage_array
+    #print '+++++++++++++++++++++++++'
     covered = [c for c in coverage_array if c['has_coverage']]
-    for c in covered:
-        del c['has_coverage']
+    for c in covered: del c['has_coverage']
     return covered
 
 
@@ -169,6 +177,12 @@ def get_awesomebar_result(db, query):
     """
     query = query.strip()
     print 'Query: %s' % query
+    if query.startswith('HP:'):
+        description=phizz.query_hpo([query])
+        return 'hpo', query
+    if query.startswith('MIM'):
+        disease=phizz.query_disease([query])
+        return 'mim', query
     # Variant
     variant = get_variants_by_rsid(db, query.lower())
     if variant:

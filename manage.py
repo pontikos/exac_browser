@@ -9,53 +9,42 @@ manager = Manager(app)
 
 
 @manager.command
-def hello():
-    print "hello"
+def load_db(): uclex.load_db()
 
 
 @manager.command
-def load_db():
-    uclex.load_db()
+def load_base_coverage(): uclex.load_base_coverage()
 
 
 @manager.command
-def load_base_coverage():
-    uclex.load_base_coverage()
+def load_variants_file(): uclex.load_variants_file()
 
 
 @manager.command
-def load_variants_file():
-    uclex.load_variants_file()
+def load_gene_models(): uclex.load_gene_models()
 
 
 @manager.command
-def load_gene_models():
-    uclex.load_gene_models()
+def load_dbsnp_file(): uclex.load_dbsnp_file()
 
 
 @manager.command
-def load_dbsnp_file():
-    uclex.load_dbsnp_file()
+def load_constraint_information(): uclex.load_constraint_information()
 
 
 @manager.command
-def load_constraint_information():
-    uclex.load_constraint_information()
+def load_mnps(): uclex.load_mnps()
 
 
 @manager.command
-def load_mnps():
-    uclex.load_mnps()
+def create_cache(): uclex.create_cache()
 
 
 @manager.command
-def create_cache():
-    uclex.create_cache()
-
+def precalculate_metrics(): uclex.precalculate_metrics()
 
 @manager.command
-def precalculate_metrics():
-    uclex.precalculate_metrics()
+def mrc_hpo(): uclex.mrc_hpo()
 
 if __name__ == "__main__":
     manager.run()
