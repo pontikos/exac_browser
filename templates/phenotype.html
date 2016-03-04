@@ -1,0 +1,27 @@
+{% extends "layout.html" %}
+{% block body %}
+
+<h1>  {{ hpo.description }} ({{ hpo.hpo_term}}) </h1>
+
+{% for  id in pmids %}
+{{id}}
+{% endfor %}
+
+<table id="gene_table" class="tablesorter">
+    <thead>
+        <tr>
+            <th class='hidden-xs'>Genes</th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for g in genes %}
+        <tr>
+            <td class="omit_csv">
+                <a href="/gene/{{ g['gene_id'] }}" target="_blank"> {{ g['gene_name'] }} </href>
+            </td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+
+{% endblock %}
