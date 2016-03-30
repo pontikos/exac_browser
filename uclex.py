@@ -1,7 +1,12 @@
 #!/usr/bin/env python2
 
+from scipy.stats import chisquare
+import math
+
 from Bio import Entrez
 from phenotips_python_client import PhenotipsClient
+from phenotips_python_client import browser
+from bson.json_util import loads
 from mongodb import *
 # fizz: hpo lookup
 import phizz
@@ -41,16 +46,27 @@ from werkzeug.exceptions import default_exceptions, HTTPException
 
 import pandas
 import csv
+import time
 import StringIO
 
 from urlparse import urlparse
-
 import pickle
 
 #import pdb
 
 from flask import Flask, session
 from flask.ext.session import Session
+
+# handles live plotting if necessary
+import math
+import plotly
+print plotly.__version__  # version >1.9.4 required
+from plotly.graph_objs import Scatter, Layout
+
+# connect to R session
+import pyRserve
+
+import numpy
 
 
 logging.getLogger().addHandler(logging.StreamHandler())
@@ -95,7 +111,7 @@ def check_auth(username, password):
     Will try to connect to phenotips instance.
     """
     conn=PhenotipsClient()
-    response=conn.get_patient(auth='%s:%s' % (username, password,))
+    response=conn.get_patient(auth='%s:%s' % (username, password,),number=1)
     if response:
         # setting a session key for pubmedBatch to save result
         session['user'] = username
@@ -129,6 +145,9 @@ def get_db(dbname=None):
         g.db_conn[dbname] = connect_db(dbname)
     return g.db_conn[dbname]
 
+def get_R_session():
+    if not hasattr(g, 'R_session'): g.R_session=pyRserve.connect()
+    return g.R_session
 
 def get_hpo_graph():
     """
@@ -221,7 +240,6 @@ def create_cache():
 
 
 def precalculate_metrics():
-    import numpy
     db = get_db()
     print 'Reading %s variants...' % db.variants.count()
     metrics = defaultdict(list)
@@ -293,14 +311,26 @@ def precalculate_metrics():
 @requires_auth
 def homepage():
     cache_key = 't-homepage'
-    t = cache.get(cache_key)
+    #t = cache.get(cache_key)
+    #if t: return t
     db=get_db()
     total_variants=db.variants.count()
     patients_db=get_db('patients')
     total_patients=patients_db.patients.count()
-    if t is None:
-        t = render_template('homepage.html',total_patients=total_patients,total_variants=total_variants)
-        cache.set(cache_key, t)
+    male_patients=patients_db.patients.find( {'sex':'M'}).count()
+    female_patients=patients_db.patients.find( {'sex':'F'}).count()
+    unknown_patients=patients_db.patients.find( {'sex':'U'}).count()
+    rsession=get_R_session()
+    print(rsession.eval('length(variants)'))
+    dotfile='static/dot/patients.dot'
+    DOT=file(dotfile,'r').read().replace('\n','\\n')
+    # replace single quote
+    DOT=re.sub("'", '&#39;', DOT)
+    #fontsize=7
+    # change fontsize to 7
+    #DOT=re.sub(r'fontsize="\d+"', 'fontsize="%d"' % fontsize, DOT)
+    t = render_template('homepage.html',total_patients=total_patients,total_variants=total_variants,male_patients=male_patients,female_patients=female_patients,unknown_patients=unknown_patients,DOT=DOT)
+    #cache.set(cache_key, t)
     return t
 
 
@@ -371,82 +401,76 @@ def variant_page3(variant_str):
 def variant_page(variant_str):
     db = get_db()
     variant_str=str(variant_str).strip().replace('_','-')
-    try:
-        chrom, pos, ref, alt = variant_str.split('-')
-        pos = int(pos)
-        # pos, ref, alt = get_minimal_representation(pos, ref, alt)
-        xpos = get_xpos(chrom, pos)
-        variant = lookups.get_variant(db, xpos, ref, alt)
-        if variant is None:
-            variant = {
-                'chrom': chrom,
-                'pos': pos,
-                'xpos': xpos,
-                'ref': ref,
-                'alt': alt
-            }
-        consequences = None
-        ordered_csqs = None
-        if 'vep_annotations' in variant:
-            variant['vep_annotations'] = order_vep_by_csq(variant['vep_annotations'])  # Adds major_consequence
-            ordered_csqs = [x['major_consequence'] for x in variant['vep_annotations']]
-            ordered_csqs = reduce(lambda x, y: ','.join([x, y]) if y not in x else x, ordered_csqs, '').split(',') # Close but not quite there
-            consequences = defaultdict(lambda: defaultdict(list))
-            for annotation in variant['vep_annotations']:
-                annotation['HGVS'] = get_proper_hgvs(annotation)
-                consequences[annotation['major_consequence']][annotation['Gene']].append(annotation)
-        base_coverage = lookups.get_coverage_for_bases(db, xpos, xpos + len(ref) - 1)
-        any_covered = any([x['has_coverage'] for x in base_coverage])
-        metrics = lookups.get_metrics(db, variant)
-        # check the appropriate sqlite db to get the *expected* number of
-        # available bams and *actual* number of available bams for this variant
-        sqlite_db_path = os.path.join(
-            app.config["READ_VIZ_DIR"],
-            "combined_bams",
-            chrom,
-            "combined_chr%s_%03d.db" % (chrom, pos % 1000))
-        print(sqlite_db_path)
-        try:
-            read_viz_db = sqlite3.connect(sqlite_db_path)
-            n_het = read_viz_db.execute("select n_expected_samples, n_available_samples from t " "where chrom=? and pos=? and ref=? and alt=? and het_or_hom=?", (chrom, pos, ref, alt, 'het')).fetchone()
-            n_hom = read_viz_db.execute("select n_expected_samples, n_available_samples from t " "where chrom=? and pos=? and ref=? and alt=? and het_or_hom=?", (chrom, pos, ref, alt, 'hom')).fetchone()
-            read_viz_db.close()
-        except Exception, e:
-            logging.debug("Error when accessing sqlite db: %s - %s", sqlite_db_path, e)
-            n_het = n_hom = None
-
-        read_viz_dict = {
-            'het': {'n_expected': n_het[0] if n_het is not None and n_het[0] is not None else -1, 'n_available': n_het[1] if n_het and n_het[1] else 0,},
-            'hom': {'n_expected': n_hom[0] if n_hom is not None and n_hom[0] is not None else -1, 'n_available': n_hom[1] if n_hom and n_hom[1] else 0,},
+    chrom, pos, ref, alt = variant_str.split('-')
+    pos = int(pos)
+    # pos, ref, alt = get_minimal_representation(pos, ref, alt)
+    xpos = get_xpos(chrom, pos)
+    variant = lookups.get_variant(db, xpos, ref, alt)
+    print(variant)
+    if variant is None:
+        variant = {
+            'chrom': chrom,
+            'pos': pos,
+            'xpos': xpos,
+            'ref': ref,
+            'alt': alt
         }
-
-        for het_or_hom in ('het', 'hom',):
-            #read_viz_dict[het_or_hom]['some_samples_missing'] = (read_viz_dict[het_or_hom]['n_expected'] > 0)    and (read_viz_dict[het_or_hom]['n_expected'] - read_viz_dict[het_or_hom]['n_available'] > 0)
-            read_viz_dict[het_or_hom]['all_samples_missing'] = (read_viz_dict[het_or_hom]['n_expected'] != 0) and (read_viz_dict[het_or_hom]['n_available'] == 0)
-            read_viz_dict[het_or_hom]['readgroups'] = [ '%(chrom)s-%(pos)s-%(ref)s-%(alt)s_%(het_or_hom)s%(i)s' % locals() for i in range(read_viz_dict[het_or_hom]['n_available']) ]   #eg. '1-157768000-G-C_hom1', 
-            read_viz_dict[het_or_hom]['urls'] = [ os.path.join('combined_bams', chrom, 'combined_chr%s_%03d.bam' % (chrom, pos % 1000)) for i in range(read_viz_dict[het_or_hom]['n_available']) ]
-
-        print 'Rendering variant: %s' % variant_str
-        return render_template(
-            'variant.html',
-            variant=variant,
-            base_coverage=base_coverage,
-            consequences=consequences,
-            any_covered=any_covered,
-            ordered_csqs=ordered_csqs,
-            metrics=metrics,
-            read_viz=read_viz_dict,
-        )
-    except Exception:
-        print 'Failed on variant:', variant_str, ';Error=', traceback.format_exc()
-        abort(404)
+    consequences = None
+    ordered_csqs = None
+    if 'vep_annotations' in variant:
+        variant['vep_annotations'] = order_vep_by_csq(variant['vep_annotations'])  # Adds major_consequence
+        ordered_csqs = [x['major_consequence'] for x in variant['vep_annotations']]
+        ordered_csqs = reduce(lambda x, y: ','.join([x, y]) if y not in x else x, ordered_csqs, '').split(',') # Close but not quite there
+        consequences = defaultdict(lambda: defaultdict(list))
+        for annotation in variant['vep_annotations']:
+            annotation['HGVS'] = get_proper_hgvs(annotation)
+            consequences[annotation['major_consequence']][annotation['Gene']].append(annotation)
+    base_coverage = lookups.get_coverage_for_bases(db, xpos, xpos + len(ref) - 1)
+    any_covered = any([x['has_coverage'] for x in base_coverage])
+    metrics = lookups.get_metrics(db, variant)
+    # check the appropriate sqlite db to get the *expected* number of
+    # available bams and *actual* number of available bams for this variant
+    sqlite_db_path = os.path.join(
+        app.config["READ_VIZ_DIR"],
+        "combined_bams",
+        chrom,
+        "combined_chr%s_%03d.db" % (chrom, pos % 1000))
+    print(sqlite_db_path)
+    try:
+        read_viz_db = sqlite3.connect(sqlite_db_path)
+        n_het = read_viz_db.execute("select n_expected_samples, n_available_samples from t " "where chrom=? and pos=? and ref=? and alt=? and het_or_hom=?", (chrom, pos, ref, alt, 'het')).fetchone()
+        n_hom = read_viz_db.execute("select n_expected_samples, n_available_samples from t " "where chrom=? and pos=? and ref=? and alt=? and het_or_hom=?", (chrom, pos, ref, alt, 'hom')).fetchone()
+        read_viz_db.close()
+    except Exception, e:
+        logging.debug("Error when accessing sqlite db: %s - %s", sqlite_db_path, e)
+        n_het = n_hom = None
+    read_viz_dict = {
+        'het': {'n_expected': n_het[0] if n_het is not None and n_het[0] is not None else -1, 'n_available': n_het[1] if n_het and n_het[1] else 0,},
+        'hom': {'n_expected': n_hom[0] if n_hom is not None and n_hom[0] is not None else -1, 'n_available': n_hom[1] if n_hom and n_hom[1] else 0,},
+    }
+    for het_or_hom in ('het', 'hom',):
+        #read_viz_dict[het_or_hom]['some_samples_missing'] = (read_viz_dict[het_or_hom]['n_expected'] > 0)    and (read_viz_dict[het_or_hom]['n_expected'] - read_viz_dict[het_or_hom]['n_available'] > 0)
+        read_viz_dict[het_or_hom]['all_samples_missing'] = (read_viz_dict[het_or_hom]['n_expected'] != 0) and (read_viz_dict[het_or_hom]['n_available'] == 0)
+        read_viz_dict[het_or_hom]['readgroups'] = [ '%(chrom)s-%(pos)s-%(ref)s-%(alt)s_%(het_or_hom)s%(i)s' % locals() for i in range(read_viz_dict[het_or_hom]['n_available']) ]   #eg. '1-157768000-G-C_hom1', 
+        read_viz_dict[het_or_hom]['urls'] = [ os.path.join('combined_bams', chrom, 'combined_chr%s_%03d.bam' % (chrom, pos % 1000)) for i in range(read_viz_dict[het_or_hom]['n_available']) ]
+    print 'Rendering variant: %s' % variant_str
+    return render_template(
+        'variant.html',
+        variant=variant,
+        base_coverage=base_coverage,
+        consequences=consequences,
+        any_covered=any_covered,
+        ordered_csqs=ordered_csqs,
+        metrics=metrics,
+        read_viz=read_viz_dict,
+    )
 
 
 @app.route('/variant2/<variant_str>')
 def variant_page2(variant_str):
     variant_str=str(variant_str).strip().replace('_','-')
     chrom, pos, ref, alt = variant_str.split('-')
-    tb=pysam.TabixFile('/slms/UGI/vm_exports/vyp/phenotips/uclex_files/current/mainset_January2015_chr%s.vcf.gz' % chrom,)
+    tb=pysam.TabixFile('/slms/UGI/vm_exports/vyp/phenotips/uclex_files/current/chr%s.vcf.gz' % chrom,)
     region=str('%s:%s-%s'%(chrom, pos, int(pos),))
     headers=[h for h in tb.header]
     headers=(headers[len(headers)-1]).strip().split('\t')
@@ -469,35 +493,142 @@ def variant_page2(variant_str):
     return('\n\n'.join(samples))
 
 
+@app.route('/chisqu/<variant_str>')
+def chisq(variant_str):
+    variant_str=str(variant_str).strip().replace('_','-')
+    chrom, pos, ref, alt = variant_str.split('-')
+    tb=pysam.TabixFile('/slms/UGI/vm_exports/vyp/phenotips/uclex_files/current/chr%s.vcf.gz' % chrom,)
+    region=str('%s:%s-%s'%(chrom, pos, int(pos),))
+    headers=[h for h in tb.header]
+    headers=(headers[len(headers)-1]).strip().split('\t')
+    print(region)
+    records=tb.fetch(region=region)
+    geno=dict(zip(headers, [r.split('\t') for r in records][0]))
+    samples=[h for h in geno if geno[h].split(':')[0]=='0/1' or geno[h].split(':')[0]=='1/1']
+    #d=csv.DictReader(file('/data/uclex_files/UCLexInfo/uclex-samples.csv','r'),delimiter=',')
+    #headers=file('/slms/UGI/vm_exports/vyp/phenotips/uclex_files/current/headers.txt','r').read().strip().replace('#','').split('\t')
+    #d=csv.DictReader(file('/data/UCLpheno/uclex-hpo.txt','r'),delimiter='\t')
+    for r in d:
+        #if r['eid'] not in samples:
+        if r['sample'] not in samples: continue
+        print(r['sample'])
+        pheno=r['phenotype']
+        print(pheno)
+        if pheno.startswith('HP'):
+            print(phizz.query_hpo([pheno]))
+        elif pheno.startswith('MIM'):
+            print(phizz.query_disease([pheno]))
+    return('\n\n'.join(samples))
+
+
+
 @app.route('/hpo/<hpo_id>')
 def hpo_page(hpo_id):
     patients_db=get_db('patients')
     db=get_db()
+    rsession=get_R_session()
     hpo_db=get_db('hpo')
-    print(str(hpo_id))
-    patients=[p for p in patients_db.patients.find( { 'features': {'$elemMatch':{'id':str(hpo_id)}} } )]
-    patient_ids=[p['external_id'] for p in patients]
-    hpo=phizz.query_hpo([hpo_id])[0]
+    #patients=[p for p in patients_db.patients.find( { 'features': {'$elemMatch':{'id':str(hpo_id)}} } )]
+    #patient_ids=[p['external_id'] for p in patients]
+    #hpo=phizz.query_hpo([hpo_id])[0]
+    hpo_name=str(rsession.eval('hpo$name["%s"]'%hpo_id).tolist()[0])
     #print(len([v['VARIANT_ID'] for v in db.variants.find({'HET' : { '$in': patient_ids }})]))
     #print(len([v['VARIANT_ID'] for v in db.variants.find({'HOM' : { '$in': patient_ids }})]))
-    r=patients_db.hpo.find_one({'hp_id':hpo_id})
-    if r: external_ids=r['external_ids']
-    else: external_ids=[]
+    #r=patients_db.hpo.find_one({'hp_id':hpo_id})
+    #if r: external_ids=r['external_ids']
+    #else: external_ids=[]
     genes=[lookups.get_gene_by_name(db, r['Gene-Name']) for r in hpo_db.hpo_gene.find({'HPO-ID':hpo_id})]
+    print('num genes', len(genes))
     #for r in hpo_db.hpo_pubmed.find({'hpoid':hpo_id}): print(r)
     #pmids=[r['pmid'] for r in hpo_db.hpo_pubmed.find({'hpoid':hpo_id})]
     pmids=[]
+    #hpo_patients=rsession.eval('query.hpo("%s")'%hpo_id,)
+    #print('num patients',len(hpo_patients))
+    #if type(hpo_patients) is str:
+        #hpo_patients=[hpo_patients]
+    #else:
+        #hpo_patients=hpo_patients.tolist()
+    ## only return common variants if there are many individuals
+    ##rsession.voidEval('common_variants <- common.variants')
+    ## private variants (not seen in others in the cohort)
+    ##rsession.voidEval('common_variants <- common.variants')
+    #variants=rsession.r.private_variants(hpo_patients)
+    #if type(variants) is str:
+        #variants=[variants]
+    #else:
+        #variants=variants.tolist()
+    #print('num variants',len(variants),)
+    #variants=[db.variants.find_one({'variant_id':v.replace('_','-')}) for v in variants[:100]]
     #[variant for variant in lookups.get_variants_in_gene(db, g['gene_id'])]
        #if variant['major_consequence']!='stop_gained': continue
        #print(variant)
        #break
     #print( lookups.get_variants_in_gene(db, 'CNNM4') )
-    #vcf_reader = pysam.VariantFile('/slms/UGI/vm_exports/vyp/phenotips/uclex_files/current/mainset_January2015_chr%s.vcf.gz' % '22')
+    #vcf_reader = pysam.VariantFile('/slms/UGI/vm_exports/vyp/phenotips/uclex_files/current/chr%s.vcf.gz' % '22')
     #for record in vcf_reader:
         #for s in external_ids:
             #r=record.samples[s]
             #if 'GT' in r: print(r['GT'])
-    return render_template('phenotype.html',hpo=hpo,external_ids=external_ids,genes=genes,pmids=pmids)
+    return render_template('phenotype.html',hpo_id=hpo_id,hpo_name=hpo_name,external_ids=[],genes=genes,pmids=pmids,individuals=[],variants=[])
+
+# AJAX
+# fetch patients iwth hpo term
+@app.route('/fetch_hpo',methods=['GET','POST'])
+def fetch_hpo():
+    if request.method=='POST':
+        hpo_ids=request.form['hpo_ids'].strip().split(',')
+    else:
+        hpo_ids=request.args.get('hpo_ids').strip().split(',')
+    hpo_id=hpo_ids[0]
+    print('HPO',hpo_id)
+    rsession=get_R_session()
+    hpo_names=str(rsession.eval('hpo$name["%s"]'%hpo_id).tolist()[0])
+    hpo_patients=rsession.eval('query.hpo("%s")'%hpo_id,)
+    print('num patients',len(hpo_patients))
+    if type(hpo_patients) is str:
+        hpo_patients=[hpo_patients]
+    else:
+        hpo_patients=hpo_patients.tolist()
+    res=jsonify(result=hpo_patients)
+    return res
+
+# AJAX
+# fetch variants private to patients
+# That is variants which are only seen in these patients and no one else.
+@app.route('/fetch_private_variants',methods=['GET','POST'])
+def fetch_private_variants():
+    if request.method=='POST':
+        hpo_patients=request.form['patients'].strip().split(',')
+    else:
+        hpo_patients=request.args.get('patients').strip().split(',')
+    print('hpo_patients',hpo_patients,)
+    rsession=get_R_session()
+    variants=rsession.r.private_variants(hpo_patients)
+    print('private variants', variants)
+    if type(variants) is str:
+        variants=[variants]
+    else:
+        variants=variants.tolist()
+    print('num of private variants',len(variants),)
+    res=jsonify(result=variants)
+    return res
+
+# AJAX
+# fetches information from db
+@app.route('/fetch_variant',methods=['GET','POST'])
+def fetch_variant():
+    if request.method=='POST':
+        variants=request.form['variants'].strip().split(',')
+    else:
+        variants=request.args.get('variant').strip().split(',')
+    db=get_db()
+    print(variants)
+    req_len=len(variants)
+    variants=[db.variants.find_one({'variant_id':variant_id.replace('_','-')}, fields={'_id': False}) for variant_id in variants]
+    ans_len=len(variants)
+    print(req_len==ans_len)
+    res=jsonify(result=variants)
+    return res
 
 @app.route('/mim/<mim_id>')
 def mim_page(mim_id):
@@ -517,104 +648,192 @@ def patient_page(patient_id):
     print(patients)
     return None
 
-def get_gene_page_content(gene_id):
+@app.route('/Exomiser/<path:path>')
+@requires_auth
+def exomiser_page(path):
+    #is this user authorized to see this patient?
+    return send_from_directory('Exomiser', path)
+
+@app.route('/example/')
+@requires_auth
+def example():
+    return send_from_directory('templates', 'temp-plot.html')
+
+
+def get_gene_page_content(gene_id,hpo_id=None):
     db = get_db()
-    try:
-        gene = lookups.get_gene(db, gene_id)
-        if gene is None:
-            abort(404)
-        cache_key = 't-gene-{}'.format(gene_id)
-        t = cache.get(cache_key)
-        print 'Rendering %sgene: %s' % ('' if t is None else 'cached ', gene_id)
-        if t is None:
-            variants_in_gene = lookups.get_variants_in_gene(db, gene_id)
-            print('variants_in_gene',len(variants_in_gene))
-            # which transcript contains most of the variants
-            transcript_counter=Counter([t for v in variants_in_gene for t in v['transcripts'] ])
-            print(transcript_counter)
-            transcript_with_most_variants=transcript_counter.most_common(1)[0][0]
-            print('transcript with most variants',transcript_with_most_variants)
-            transcripts_in_gene = lookups.get_transcripts_in_gene(db, gene_id)
-            print('transcripts_in_gene',len(transcripts_in_gene))
-            # Get some canonical transcript and corresponding info
-            #transcript_id = gene['canonical_transcript']
-            transcript_id = transcript_with_most_variants
-            # if none of the variants are on the canonical transcript use the transcript with the most variants on it
-            transcript = lookups.get_transcript(db, transcript_id)
-            variants_in_transcript = lookups.get_variants_in_transcript(db, transcript_id)
-            #print('variants_in_transcript',len(variants_in_transcript))
-            coverage_stats = lookups.get_coverage_for_transcript(db, transcript['xstart'] - EXON_PADDING, transcript['xstop'] + EXON_PADDING)
-            #print('coverage_stats',len(coverage_stats))
-            add_transcript_coordinate_to_variants(db, variants_in_transcript, transcript_id)
-            constraint_info = lookups.get_constraint_for_transcript(db, transcript_id)
-            #print('constraint_info',constraint_info)
-            #print(gene)
-            #print(transcript)
-            #print(variants_in_gene)
-            print '============'
-            print coverage_stats
-            print '============'
-            t=render_template(
-                'gene.html',
-                gene=gene,
-                transcript=transcript,
-                variants_in_gene=variants_in_gene,
-                variants_in_transcript=variants_in_transcript,
-                transcripts_in_gene=transcripts_in_gene,
-                coverage_stats=coverage_stats,
-                constraint=constraint_info,
-                csq_order=csq_order,
-            )
-            print('all good')
-            cache.set(cache_key, t, timeout=1000*60)
+    rsession=get_R_session()
+    # scrape exac
+    b=browser.Browser('exac.broadinstitute.org')
+    p=b.get_page('/gene/%s'%gene_id)
+    m = re.compile('window.table_variants\s*=\s*(.*)\s*;')
+    exac_table_variants=dict()
+    if m: exac_table_variants=loads(m.search(p).group(1))
+    gene = lookups.get_gene(db, gene_id)
+    gene_name=gene['gene_name']
+    if gene is None: abort(404)
+    # gene and hpo term ideally
+    cache_key = 't-gene-{}'.format(gene_id)
+    t = cache.get(cache_key)
+    print 'Rendering %sgene: %s' % ('' if t is None else 'cached ', gene_id)
+    if t is not None:
         print 'Rendering gene: %s' % gene_id
         #print(phizz.query_gene(ensembl_id=str(gene_id)))
         return t
-    except Exception, e:
-        print(dir(e))
-        print(e.args)
-        print(e.message)
-        print 'Failed on gene:', gene_id, ';Error=', e
-        #abort(404)
+    # 1. get variants in gene from db
+    variants_in_gene = lookups.get_variants_in_gene(db, gene_id)
+    print('variants_in_gene',len(variants_in_gene))
+    # which transcript contains most of the variants
+    transcript_counter=Counter([t for v in variants_in_gene for t in v['transcripts'] ])
+    print(transcript_counter)
+    transcript_with_most_variants=transcript_counter.most_common(1)[0][0]
+    print('transcript with most variants',transcript_with_most_variants)
+    transcripts_in_gene = lookups.get_transcripts_in_gene(db, gene_id)
+    print('transcripts_in_gene',len(transcripts_in_gene))
+    # Get some canonical transcript and corresponding info
+    #transcript_id = gene['canonical_transcript']
+    transcript_id = transcript_with_most_variants
+    # if none of the variants are on the canonical transcript use the transcript with the most variants on it
+    transcript = lookups.get_transcript(db, transcript_id)
+    variants_in_transcript = lookups.get_variants_in_transcript(db, transcript_id)
+    #print('variants_in_transcript',len(variants_in_transcript))
+    #coverage_stats = lookups.get_coverage_for_transcript(db, transcript['xstart'] - EXON_PADDING, transcript['xstop'] + EXON_PADDING)
+    #print('coverage_stats',len(coverage_stats))
+    add_transcript_coordinate_to_variants(db, variants_in_transcript, transcript_id)
+    constraint_info = lookups.get_constraint_for_transcript(db, transcript_id)
+    #print('constraint_info',constraint_info)
+    # 2. get patients with hpo term and patients without
+    #patients=[p for p in patients_db.patients.find( { 'features': {'$elemMatch':{'id':str(hpo_id)}} } )]
+    #patient_ids=[p['external_id'] for p in patients]
+    #hpo=phizz.query_hpo([hpo_id])[0]
+    # samples
+    headers=frozenset(file('/slms/UGI/vm_exports/vyp/phenotips/uclex_files/current/headers.txt','r').read().strip().split('\t'))
+    if hpo_id is None:
+        hpo="HP:0000001"
+        hpo_name='All'
+        cases=frozenset()
+        print('num cases',len(cases))
+    else:
+        #cases
+        hpo_name=str(rsession.eval('hpo$name["%s"]'%hpo_id).tolist()[0])
+        print(hpo_name)
+        cases=rsession.eval('query.hpo("%s")'%hpo_id,)
+        cases=frozenset(cases.tolist())
+        print('num cases',len(cases))
+    #controls
+    #everyone=rsession.eval('query.hpo("HP:0000001")')
+    #everyone=frozenset(everyone.tolist())
+    controls=headers-cases
+    #everyone=everyone & headers
+    #controls=frozenset(everyone) - frozenset(cases)
+    print('num controls',len(controls))
+    # 3. for each variant tabix,  get counts and chisq
+    rsession.voidEval('chisq_test <- chisq.test')
+    chrom, pos, ref, alt = variants_in_gene[0]['variant_id'].split('-')
+    tb=pysam.TabixFile('/slms/UGI/vm_exports/vyp/phenotips/uclex_files/current/chr%s.vcf.gz' % chrom,)
+    region ='%s:%s-%s' % (str(gene['chrom']), str(gene['start']), str(gene['stop']),)
+    headers=[h for h in tb.header]
+    headers=(headers[len(headers)-1]).strip('#').strip().split('\t')
+    records=[dict(zip(headers,r.strip().split('\t'))) for r in tb.fetch(region)]
+    print(len(records))
+    records=dict([('%s-%s-%s-%s' % (r['CHROM'], r['POS'], r['REF'], r['ALT'],),r,) for r in records])
+    for i,_, in enumerate(variants_in_gene):
+        v=variants_in_gene[i]
+        variant_str=v['variant_id']
+        print(variant_str)
+        variant_str=str(variant_str).strip().replace('_','-')
+        chrom, pos, ref, alt = variant_str.split('-')
+        v['pos_coding_noutr']= get_xpos(chrom, pos)
+        #region=str('%s:%s-%s'%(chrom, pos, int(pos),))
+        #records=tb.fetch(region=region)
+        #geno=dict(zip(headers, [r.split('\t') for r in records][0]))
+        if variant_str not in records:
+            v["-log10pvalue"]=0
+            continue
+        geno=records[variant_str]
+        #samples=[h for h in geno if geno[h].split(':')[0]=='0/1' or geno[h].split(':')[0]=='1/1']
+        geno_cases=[geno[ca].split(':')[0] for ca in cases]
+        caco=Counter(geno_cases)
+        geno_controls=[geno[co].split(':')[0] for co in controls]
+        coco=Counter(geno_controls)
+        ca_mut=caco.get('1/1',0)+caco.get('0/1',0)
+        ca_wt=caco.get('0/0',0)
+        co_mut=coco.get('1/1',0)+coco.get('0/1',0)
+        co_wt=coco.get('0/0',0)
+        v['co_wt']=co_wt
+        v['ca_wt']=ca_wt
+        v['co_mut']=co_mut
+        v['ca_mut']=ca_mut
+        if ca_mut==0:
+            v["-log10pvalue"]=0
+        else:
+            counts=numpy.array([[ca_mut,ca_wt],[co_mut,co_wt]])
+            print(counts)
+            stat=dict(rsession.r.chisq_test(counts).astuples())
+            v['-log10pvalue']=-math.log10(stat['p.value'])
+            #print(chisquare([ca_mut,ca_wt,co_mut,co_wt]))
+            #d=csv.DictReader(file('/data/uclex_files/UCLexInfo/uclex-samples.csv','r'),delimiter=',')
+            #headers=file('/slms/UGI/vm_exports/vyp/phenotips/uclex_files/current/headers.txt','r').read().strip().replace('#','').split('\t')
+            #get EXAC info
+        for j,_, in enumerate(exac_table_variants):
+            exac_v=exac_table_variants[j]
+            if exac_v['variant_id']!=variant_str: continue
+            v['EXAC']=exac_v
+            v['HGVS']=exac_v['HGVS']
+            v['HGVSp']=exac_v['HGVSp']
+            v['HGVSc']=exac_v['HGVSc']
+            v['major_consequence']=exac_v['major_consequence']
+            v['exac_allele_freq']=exac_v['allele_freq']
+            break
+        variants_in_gene[i]=v
+    # gene hpo
+    # dotfile='/slms/UGI/vm_exports/vyp/phenotips/HPO/dot/%s.dot' % gene_name
+    # temporary dotfile for test
+    dotfile='static/dot/literature_phenotype/%s.dot' % gene_name
+    if os.path.isfile(dotfile):
+        literature_DOT=file(dotfile,'r').read().replace('\n','\\n')
+        # replace single quote
+        literature_DOT=re.sub("'", '&#39;', literature_DOT)
+        #fontsize=7
+        # change fontsize to 7
+        #DOT=re.sub(r'fontsize="\d+"', 'fontsize="%d"' % fontsize, DOT)
+    else:
+        literature_DOT=''
+    simreg_DOT=''
+    print('all good')
+    # this is to set the pos
+    for i,_, in enumerate(variants_in_gene):
+        variant_id=variants_in_gene[i]['variant_id']
+        for j,_, in enumerate(variants_in_transcript):
+            variant_id2=variants_in_transcript[j]['variant_id']
+            if variant_id==variant_id2:
+                variants_in_transcript[j]['-log10pvalue']=variants_in_gene[i]['-log10pvalue']
+                break
+    t=render_template( 'gene.html',
+            gene=gene,
+            transcript=transcript,
+            variants_in_gene=variants_in_gene,
+            variants_in_transcript=variants_in_transcript,
+            transcripts_in_gene=transcripts_in_gene,
+            constraint=constraint_info,
+            csq_order=csq_order,
+            literature_DOT=literature_DOT,
+            simreg_DOT=simreg_DOT,
+            hpo_name=hpo_name, coverage_stats=[])
+    #cache.set(cache_key, t, timeout=1000*60)
+    return t
 
-@app.route('/gene/<gene_id>')
+
+@app.route('/gene/<gene_id>',methods=['GET'])
 def gene_page(gene_id):
+    # if gene not ensembl id then translate to
+    db=get_db()
+    hpo=request.args.get('hpo')
+    if not gene_id.startswith('ENSG'): gene_id = lookups.get_gene_by_name(get_db(), gene_id)['gene_id']
     if gene_id in app.config['GENES_TO_CACHE']:
         return open(os.path.join(app.config['GENE_CACHE_DIR'], '{}.html'.format(gene_id))).read()
     else:
-        return get_gene_page_content(gene_id)
-
-
-def get_gene_page_content2(gene_id):
-    db = get_db()
-    try:
-        gene = lookups.get_gene(db, gene_id)
-        if gene is None: abort(404)
-        cache_key = 't-gene-{}'.format(gene_id)
-        t = cache.get(cache_key)
-        print 'Rendering %sgene: %s' % ('' if t is None else 'cached ', gene_id)
-        if t is None:
-            variants_in_gene = lookups.get_variants_in_gene(db, gene_id)
-            print('variants_in_gene',len(variants_in_gene))
-            # which transcript contains most of the variants
-            transcript_counter=Counter([t for v in variants_in_gene for t in v['transcripts'] ])
-            #which of these variant is missense/frameshift
-            #what is the HPO enrichment
-            for v in variants_in_gene:
-                #print(v['vep_annotation']['Consequence'])
-                if v['major_consequence']!='stop_gained': continue
-                variant_id='%s-%s-%s-%s' % (v['chrom'],v['pos'],v['ref'],v['alt'],)
-                print(lookups.get_hpo(variant_id))
-                # [u'allele_count', u'pos', u'quality_metrics', u'variant_id', u'alt', u'pop_homs', u'pop_acs', 'category', u'allele_freq', 'major_consequence', u'vep_annotations', 'HGVSc', u'rsid', u'ref', u'xpos', u'site_quality', u'orig_alt_alleles', u'genes', 'HGVSp', u'hom_count', u'chrom', u'xstart', u'allele_num', u'pop_ans', u'filter', 'flags', u'xstop', 'HGVS', u'transcripts', 'CANONICAL']
-                # u'chrom', u'xstart', u'allele_num',
-                #print(v.keys())
-        return 'done'
-    except Exception, e:
-        print(dir(e))
-        print(e.args)
-        print(e.message)
-        print 'Failed on gene:', gene_id, ';Error=', e
-
+        return get_gene_page_content(gene_id,hpo)
 
 
 @app.route('/transcript2/<transcript_id>')
@@ -648,6 +867,8 @@ def transcript_page2(transcript_id):
     except Exception, e:
         print 'Failed on transcript:', transcript_id, ';Error=', traceback.format_exc()
         abort(404)
+
+
 
 @app.route('/transcript/<transcript_id>')
 def transcript_page(transcript_id):
@@ -794,7 +1015,7 @@ def faq_page():
 
 @app.route('/samples')
 def samples_page():
-    samples=pandas.read_csv('/data/uclex_data/UCLexInfo/uclex-samples.csv')
+    samples=pandas.read_csv('/slms/UGI/vm_exports/vyp/phenotips/HPO/hpo.txt')
     return render_template('samples.html',samples=samples.to_html(escape=False))
 
 
@@ -877,7 +1098,7 @@ def load_db():
     print('Done! Loading MNPs...')
     load_mnps()
     print('Done! Creating cache...')
-    create_cache()
+    #create_cache()
     print('Done!')
 
 
@@ -1104,6 +1325,36 @@ def mrc_hpo():
         db.variants.update({'VARIANT_ID':var['VARIANT_ID']},var,upsert=True)
 
 
+"""
+To get pred_score for pubmedBatch
+[D/A].each = 10, [P].each = 5, [C].each = 6, [T/B/N].each = -1
+splicing/indel = 1000
+"""
+def get_pred_score(row):
+    pred = 0
+    if 'Func' in row and re.search('splic', row['Func']) or 'ExonicFunc' in row and re.search(r'stop|frame|del|insert', row['ExonicFunc']):
+            pred = 1000
+    else:
+        for key in row:
+            if re.search('Pred', key):
+                if row[key] == 'D' or row[key] == 'A':
+                    pred += 10
+                elif row[key] == 'P':
+                    pred += 5
+                elif row[key] == 'C':
+                    pred += 6
+                elif row[key] == 'T' or row[key] == 'B' or row[key] == 'N':
+                    pred -= 1
+    return pred
+
+"""
+for pubmedBatch
+check title and abstract is truely relevant. Assign to both this gene and each ref
+"""
+def scrutinise():
+    pass
+
+
 @app.route('/pubmedbatch/', methods=['GET', 'POST'])
 @requires_auth
 def pubmedbatch_main():
@@ -1164,7 +1415,8 @@ def pubmedbatch(folder):
         # read csv. has to make the csv string looking like a filehandle
         csv_content = csv_file.read()        
         csvreader = csv.reader(StringIO.StringIO(csv_content), delimiter=',', quotechar='"')
-        
+        # life time from config
+        life = app.config['PUBMEDBATCH_LIFE']
         # number of lines?
         line_num = len(re.findall('\n', csv_content))
         # format terms
@@ -1179,11 +1431,12 @@ def pubmedbatch(folder):
         smashed_term = ' AND (' + smashed_OR + ')'
         if smashed_AND:
             smashed_term += ' AND ' + smashed_AND
-        
         ###########################################################
         # it's time to read the csv file
         ###########################################################
         row_num = -1
+        header = [] # header
+        output = [] # all the results get pushed here
         for row in csvreader:
             row_num += 1
             # read header
@@ -1199,41 +1452,106 @@ def pubmedbatch(folder):
             if gene_name == 'NA':
                 continue
             # get rid of any parentheses and their content
-            print gene_name
             gene_name = re.sub(r'\([^)]*\)?','',gene_name)
-            print gene_name
 
+            genes={} # storing 
+            print gene_name
+            return gene_name
             ####################################################
-            # first to see if it is searched
-            # if yes, copy result
-            # elsif masked, pass
+            # first to see if masked, pass
             # else
             #   db.cache
             #       when in db.cache and up-to-date, get the pubmed result
             #       when in db.cache and out-of-date, add new pubmed result
             #       when not in db.cache, search pubmed and store
             ####################################################
+            # db.cache's structure:
+            #  {['key': '_'.join([gene_name.upper(), ','.join(OR).lower(), ','.join(AND).lower()]), 
+            #   'result': {pubmed_result},
+            #   'date': now]}
+            if re.search(r'\b' + re.escape(gene_name) + r'\b', mask_genes, re.IGNORECASE):
+                # masked. don't search, just return the row
+                if verbose:
+                    continue
+                row[column+1:column+1] = [{total_score: 0, results: ['masked']}, 0]
+                # add a placeholder for pred_score
+                row[0:0] = 0
+                ha = {}
+                for col in range(len(header)):
+                    ha[header[col]] = row[col]
+                ha['pred_score'] = get_pred_score(ha)
+                output.append(ha)
+            else:
+                # not masked
+                now = time.mktime(time.localtime()) #get time in seconds
+                lag = 0 # use it as a flag of how to search. 0 = search; now-saved['date'] = update; 
+                term = '_'.join([gene_name.upper(), ','.join(OR).lower(), ','.join(AND).lower()])
+                #print term
+                # now check if the result in the db is uptodate
+                saved = db.cache.find_one({'key': term})
+                if saved:
+                    lag = now - saved['date']
+                    # has record. let's see if it is out of date
+                    if lag  <= life:
+                        # not out of date. let's use it
+                        genes[gene_name] = saved['result']
+
+                if gene_name not in genes:
+                    # need to search
+                   # handle = Entrez.einfo()
+                   # record = Entrez.read(handle)
+                   # handle.close()
+
+                    if lag:
+                        lag = lag/3600/24 # convert it to days
+                        # need to update
+                        search_results = Entrez.read(Entrez.esearch(db='pubmed', term='Retinal dystrophy', reldate=lag, datetype='pdat', usehistory='y'))
+                    else:
+                        # just search
+                        search_results = Entrez.read(Entrez.esearch(db='pubmed', term='Retinal dystrophy', usehistory='y'))
+                    # now done the search. let's get results
+                    attempt = 1
+                    while attempt <= 10:
+                        try:
+                            handle = Entrez.efetch("pubmed",restart=0,retmax=1,retmode="xml", webenv=search_results['WebEnv'], query_key=search_results['QueryKey'])
+                        except HTTPError as err:
+                            if 500 <= err.code <= 599:
+                                print('Received error from server %s' % err)
+                            else:
+                                print('Something is wrong while efetch..')
+                            print('Attempt %i of 10' % attempt)
+                            attempt += 1
+                            time.sleep(5)
+                                
+                    records = Entrez.parse(handle)
+                    
+                    if records:
+                        # got something. let's do some calculation
+                        print records
+                        return 'ok'
+                pass
 
             return 'ok'
             break
-        handle = Entrez.einfo()
-        record = Entrez.read(handle)
-        handle.close()
-        search_results = Entrez.read(Entrez.esearch(db='pubmed', term='Retinal dystrophy', reldate=365, datetype='pdat', usehistory='y'))
-        count = int(search_results['Count'])
-        print('Found %i results' % count)
-        handle = Entrez.efetch("pubmed",restart=0,retmax=1,retmode="xml", webenv=search_results['WebEnv'], query_key=search_results['QueryKey'])
-        records = Entrez.parse(handle)
-        import pprint
-        pp = pprint.PrettyPrinter(indent=10)
-        #return( '\n'.join([record['MedlineCitation']['Article']['ArticleTitle'] for record in records]) )
-        records=[ r for r in records]
-        for r in records:
-            x=r['MedlineCitation']['Article']['Abstract']['AbstractText']
-            #print('\n'.join(map(lambda x: str(x), x)))
-            for i in x:
-                print('%s:%s' % (i.attributes['Label'], str(i)))
-        #abstract = '\n'.join(abstract)
+        #handle = Entrez.einfo()
+        #record = Entrez.read(handle)
+        #handle.close()
+        #search_results = Entrez.read(Entrez.esearch(db='pubmed', term='Retinal dystrophy', reldate=365, datetype='pdat', usehistory='y'))
+        #count = int(search_results['Count'])
+        #print('Found %i results' % count)
+        #handle = Entrez.efetch("pubmed",restart=0,retmax=1,retmode="xml", webenv=search_results['WebEnv'], query_key=search_results['QueryKey'])
+        #records = Entrez.parse(handle)
+        #import pprint
+        #pp = pprint.PrettyPrinter(indent=10)
+        ##return( '\n'.join([record['MedlineCitation']['Article']['ArticleTitle'] for record in records]) )
+        #records=[ r for r in records]
+        #for r in records:
+        #    x=r['MedlineCitation']['Article']['Abstract']['AbstractText']
+        #    #print('\n'.join(map(lambda x: str(x), x)))
+        #    for i in x:
+        #        print('%s:%s' % (i.attributes['Label'], str(i)))
+        ##abstract = '\n'.join(abstract)
+
     else:
         # get. display page
         # First see if folder exists. if not, return error
@@ -1247,7 +1565,10 @@ def pubmedbatch(folder):
         if folder not in folders:
             return "Error: " + folder + " does not exist!" 
         # get the files in the folder to display
-        for d in user_folders:
+        print(d)
+        print(folder)
+        print(user_folders)
+        for d in [user_folders]:
             if d['folder_name'] == folder:
                 files = [e['file_name'] for e in d['files'] if 'file_name' in e]
         return render_template( 'pubmedbatch.html',
@@ -1258,7 +1579,31 @@ def pubmedbatch(folder):
                 AND = AND,
                 OR = OR)
 
-
+@app.route('/plot/<gene>')
+def plot(gene):
+    #db = get_db()
+    #var=db.variants.find_one({'VARIANT_ID':'3_8775295_C_T'})
+    d=csv.DictReader(file('/slms/UGI/vm_exports/vyp/phenotips/CARDIO/assoc_3.csv','r'),delimiter=',')
+    x=[i for i, r, in enumerate(d)]
+    d=csv.DictReader(file('/slms/UGI/vm_exports/vyp/phenotips/CARDIO/assoc_3.csv','r'),delimiter=',')
+    y=[-math.log10(float(r['HCM.chisq.p'])) for r in d]
+    print(x)
+    print(y)
+    d=csv.DictReader(file('/slms/UGI/vm_exports/vyp/phenotips/CARDIO/assoc_3.csv','r'),delimiter=',')
+    #layout = dict( yaxis = dict( type = 'log', tickvals = [ 1.5, 2.53, 5.99999 ]), xaxis = dict( ticktext = [ "green eggs", "& ham", "H2O", "Gorgonzola" ], tickvals = [ 0, 1, 2, 3, 4, 5 ]))
+    labels=[r['VARIANT_ID'] for r in d]
+    layout = Layout( xaxis = dict( ticktext=labels, tickvals=x ), title="p-value plot" )
+    #Layout( title="p-value plot")
+    plotly.offline.plot({
+        "data": [
+                Scatter(
+                    x=x,
+                    y=y
+                    )
+                ],
+        "layout": layout
+        }, filename='genes/%s-pvalues.html' % (gene,), auto_open=False)
+    return send_from_directory('genes', '%s-pvalues.html' % gene,)
 
 
 if __name__ == "__main__":

@@ -3,25 +3,60 @@
     <!-- Render context vars in JS here -->
     <script type="text/javascript">
         window.gene = {{ gene|tojson|safe }};
-        window.transcript = {{ transcript|tojson|safe }};
+        window.variants_in_gene = {{ variants_in_gene|tojson|safe }};
         window.table_variants = {{ variants_in_gene|tojson|safe }};
+        window.transcript = {{ transcript|tojson|safe }};
         window.variants_in_transcript = {{ variants_in_transcript|tojson|safe }};
         window.transcripts_in_gene = {{ transcripts_in_gene|tojson|safe }};
-        window.coverage_stats = {{ coverage_stats|tojson|safe }};
+        window.coverage_stats= {{ coverage_stats|tojson|safe}};
         window.page_name = window.gene.gene_id;
     </script>
     <style>
-
+        svg path {
+            -webkit-transition: fill 0.8s; /* Safari */
+            transition: fill 0.8s;
+        }
+        .tabs {
+            margin-top: 20px;
+        }
+        .popover {
+            text-align: center;
+        }
+        .node:hover {
+            cursor:pointer;
+        }
     </style>
     <script>
         $(document).ready(function() {
-            $("#variants_loading").hide();
-            $("#variants_table_container").show();
+           $("#variants_loading").hide();
+           $("#variants_table_container").show();
+
+           jQuery('.tabs .tab-links a').on('click', function(e)  {
+           var currentAttrValue = jQuery(this).attr('href');
+           // Show/Hide Tabs
+           jQuery('.tabs ' + currentAttrValue).show().siblings().hide();
+           // Change/remove current tab to active
+           jQuery(this).parent('li').addClass('active').siblings().removeClass('active');
+           e.preventDefault();
         });
+      });
     </script>
+
+    <!--Nav tabs-->
+<div class="tabs">
+<ul class="nav nav-tabs" role="tablists">
+    <li class="active"><a href="#tab1" role="tab" data-toggle="tab">Main Page</a></li>
+    <li><a href="#tab2" role="tab" data-toggle="tab">Literature Phenotype</a></li>
+    <li><a href="#tab3" role="tab" data-toggle="tab">SimReg Phenotype</a></li>
+</ul>
+
+<div class="tab-content">
+
+<div id="tab1" class="tab-pane active">
+
     <div class="container-fluid">
         <div class="col-md-10 col-xs-offset-1 col-md-offset-1">
-            <h1>Gene: {{ gene.gene_name }}</h1>
+            <h1>Gene: {{ gene.gene_name }} Phenotype: {{hpo_name}}</h1>
             <hr/>
         </div>
         <div class="row">
@@ -127,6 +162,8 @@
                     </dd>
                 </dl>
             </div>
+
+
             <div class="col-md-1 hidden-xs">
                 <div class="dropdown">
                     <button class="btn btn-default dropdown-toggle" type="button" id="transcript_dropdown" data-toggle="dropdown">
@@ -147,6 +184,25 @@
                     </ul>
                 </div>
             </div>
+
+
+            <div class="col-md-1 hidden-xs">
+                <div class="dropdown">
+                    <button class="btn btn-default dropdown-toggle" type="button" id="transcript_dropdown" data-toggle="dropdown">
+                        Phenotype
+                        <span class="caret"></span>
+                    </button>
+                    <ul class="dropdown-menu" role="menu" aria-labelledby="transcript_dropdown">
+                            <li role="presentation">
+                                <a role="menuitem" tabindex="-1" href="/gene/{{ gene.gene_name }}?hpo=HP:000001" target="_blank">
+                                    HP:0000001
+                                </a>
+                            </li>
+                    </ul>
+                </div>
+            </div>
+
+
             <div class="col-md-5 col-md-offset-1">
                 {% if constraint %}
                     <table class="table">
@@ -202,7 +258,7 @@
             <div class="col-md-10 col-md-offset-1">
                 <h3>Gene summary</h3>
                 <!-- <h4>(<span class="hidden-xs">Coverage shown for </span><a href="http://www.ensembl.org/Help/Glossary?id=346" target="_blank">canonical transcript</a>: {{ transcript.transcript_id }})</h4> -->
-                <h4>(<span class="hidden-xs">Coverage shown for transcript with the most variants </span>: {{ transcript.transcript_id }})</h4>
+                <!-- <h4>(<span class="hidden-xs">Coverage shown for transcript with the most variants </span>: {{ transcript.transcript_id }})</h4> -->
                 <div class="row">
                     {% with plot_id = gene.gene_name %}
                         {% include 'transcript_display.html' %}
@@ -219,4 +275,56 @@
             </div>
         </div>
     </div>
+</div>
+
+
+<div id="tab2" class="tab-pane">
+    <div class="row" id="literature_graph"> </div>
+</div>
+
+<div id="tab3" class="tab-pane">
+    <div class="row" id="simreg-graph"> </div>
+</div>
+
+
+</div>
+
+</div>
+
+
+<script src="/static/bower_components/requirejs/require.js"></script>
+<script src="/static/hpo.js"></script>
+<script type="text/javascript">
+
+requirejs.config({
+    //By default load any module IDs from js/lib
+    baseUrl: 'js',
+    //except, if the module ID starts with "app",
+    //load it from the js/app directory. paths
+    //config is relative to the baseUrl, and
+    //never includes a ".js" extension since
+    //the paths config could be for a directory.
+    paths: {
+        d3: '/static/bower_components/d3/d3',
+       // "dot-checker": '/static/bower_components/graphviz-d3-renderer/dist/dot-checker',
+        "layout-worker": '/static/bower_components/graph-viz-d3-js/dist/layout-worker',
+        worker: '/static/bower_components/requirejs-web-workers/src/worker',
+        renderer: '/static/bower_components/graph-viz-d3-js/dist/renderer'
+    }
+});
+require(["renderer"],
+function (renderer) {
+    var literature_DOTstring=' {{literature_DOT|safe}} ';
+    var simreg_DOTstring=' {{simreg_DOT|safe}} ';
+    // initialize svg stage
+    zoomFunc = renderer.init({element:"#literature_graph", extend:[0.1, 10]});
+    //zoomFunc = renderer.init({element:"#simreg_graph", extend:[0.1, 10]});
+    // update stage with new dot source
+    renderer.render({source:literature_DOTstring, labelAttributer: myLabelAttributer, callBack:callback});
+    //renderer.render({source:simreg_DOTstring, labelAttributer: myLabelAttributer, callBack:callback});
+});
+</script>
+
+
+
 {% endblock %}
